@@ -4,17 +4,28 @@ from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from app.db import app_db
+from app.db import app_db, schema_catalog
 from app.db.app_db import get_pool
 from app.db.connectors import get_connector, resolve_db_port
 from app.schemas.project import (
+    CatalogTableSchema,
+    ColumnAnnotationUpdate,
     ProjectCreate,
     ProjectPreviewResponse,
     ProjectResponse,
     ProjectSchemaResponse,
+    TableAnnotationUpdate,
 )
 
 router = APIRouter(tags=["projects"])
+
+
+def _catalog_response(project_id: UUID, rows: list[dict]) -> ProjectSchemaResponse:
+    return ProjectSchemaResponse(
+        project_id=project_id,
+        db_name=rows[0]["db_name"],
+        tables=[CatalogTableSchema(**row) for row in rows],
+    )
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -56,6 +67,20 @@ async def create_project(
         db_username=payload.db_username,
         db_password=payload.db_password,
     )
+
+    try:
+        await schema_catalog.extract_and_store_schema(
+            pool, row["id"], row["db_name"], connector
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Project was created but schema sync failed. "
+                "Retry with POST /projects/{id}/schema/sync."
+            ),
+        ) from None
+
     return ProjectResponse(**app_db.record_to_dict(row))
 
 
@@ -123,12 +148,11 @@ async def preview_project(
     return ProjectPreviewResponse(project_id=project_id, tables=tables)
 
 
-@router.get(
-    "/projects/{project_id}/schema",
+@router.post(
+    "/projects/{project_id}/schema/sync",
     response_model=ProjectSchemaResponse,
-    response_model_exclude_none=True,
 )
-async def get_project_schema(
+async def sync_project_schema(
     project_id: UUID,
     pool: Pool = Depends(get_pool),
 ) -> ProjectSchemaResponse:
@@ -149,17 +173,96 @@ async def get_project_schema(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
     try:
-        schema = await connector.get_schema()
+        rows = await schema_catalog.extract_and_store_schema(
+            pool, project_id, project["db_name"], connector
+        )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not connect to the project's external database.",
         ) from None
 
-    return ProjectSchemaResponse(
-        project_id=project_id,
-        engine=project["engine"],
-        tables=schema.get("tables", []),
-        relationships=schema.get("relationships", []),
-        note=schema.get("note"),
+    if not rows:
+        return ProjectSchemaResponse(
+            project_id=project_id,
+            db_name=project["db_name"],
+            tables=[],
+        )
+
+    return _catalog_response(project_id, rows)
+
+
+@router.get(
+    "/projects/{project_id}/schema",
+    response_model=ProjectSchemaResponse,
+)
+async def get_project_schema(
+    project_id: UUID,
+    pool: Pool = Depends(get_pool),
+) -> ProjectSchemaResponse:
+    project = await app_db.get_project(pool, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    rows = await schema_catalog.get_stored_schema(pool, project_id)
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schema not synced yet",
+        )
+
+    return _catalog_response(project_id, rows)
+
+
+@router.patch(
+    "/projects/{project_id}/schema/{table_name}",
+    response_model=CatalogTableSchema,
+)
+async def patch_table_annotations(
+    project_id: UUID,
+    table_name: str,
+    payload: TableAnnotationUpdate,
+    pool: Pool = Depends(get_pool),
+) -> CatalogTableSchema:
+    project = await app_db.get_project(pool, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    row = await schema_catalog.update_table_annotations(
+        pool, project_id, table_name, payload.model_dump(exclude_unset=True)
     )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Table not found")
+
+    return CatalogTableSchema(**row)
+
+
+@router.patch(
+    "/projects/{project_id}/schema/{table_name}/columns/{column_name}",
+    response_model=CatalogTableSchema,
+)
+async def patch_column_annotations(
+    project_id: UUID,
+    table_name: str,
+    column_name: str,
+    payload: ColumnAnnotationUpdate,
+    pool: Pool = Depends(get_pool),
+) -> CatalogTableSchema:
+    project = await app_db.get_project(pool, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    row = await schema_catalog.update_column_annotations(
+        pool,
+        project_id,
+        table_name,
+        column_name,
+        payload.model_dump(exclude_unset=True),
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Table or column not found",
+        )
+
+    return CatalogTableSchema(**row)

@@ -52,12 +52,11 @@ class SchemaColumn(BaseModel):
     primary_key: bool | None = None
     foreign_key: str | None = None
     presence_pct: float | None = None
-
-
-class TableSchema(BaseModel):
-    table_name: str
-    columns: list[SchemaColumn] = Field(default_factory=list)
-    inferred: bool
+    description: str | None = None
+    business_name: str | None = None
+    value_mappings: dict[str, Any] | None = None
+    null_meanings: str | None = None
+    caveats: str | None = None
 
 
 class SchemaRelationship(BaseModel):
@@ -71,9 +70,30 @@ class SchemaRelationship(BaseModel):
     confidence: Literal["declared", "inferred"]
 
 
+class CatalogTableSchema(BaseModel):
+    table_name: str
+    table_description: str | None = None
+    business_name: str | None = None
+    columns: list[SchemaColumn] = Field(default_factory=list)
+    relationships: list[SchemaRelationship] = Field(default_factory=list)
+    inferred: bool
+    updated_at: datetime
+
+
 class ProjectSchemaResponse(BaseModel):
     project_id: UUID
-    engine: Literal["postgres", "mongodb"]
-    tables: list[TableSchema]
-    relationships: list[SchemaRelationship] = Field(default_factory=list)
-    note: str | None = None
+    db_name: str
+    tables: list[CatalogTableSchema]
+
+
+class TableAnnotationUpdate(BaseModel):
+    table_description: str | None = None
+    business_name: str | None = None
+
+
+class ColumnAnnotationUpdate(BaseModel):
+    description: str | None = None
+    business_name: str | None = None
+    value_mappings: dict[str, Any] | None = None
+    null_meanings: str | None = None
+    caveats: str | None = None
