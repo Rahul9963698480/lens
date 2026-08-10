@@ -18,8 +18,12 @@ export default defineConfig({
   server: {
     port: 8080,
     proxy: {
-      "/api/v1": {
-        target: "http://localhost:8082",
+      "/projects": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+      "/health": {
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },

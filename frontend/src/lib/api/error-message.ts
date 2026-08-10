@@ -16,5 +16,8 @@ export function apiErrorMessage(
   if (typeof record.detail === 'string' && record.detail.trim()) {
     return record.detail.trim();
   }
+  if (typeof record.error === 'string' && record.error.trim()) {
+    return record.error.trim();
+  }
   return fallback;
 }

@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig } from 'axios';
 import { config } from '@/config/env';
 import { apiErrorMessage } from '@/lib/api/error-message';
 import { notify } from '@/lib/notify';
@@ -13,10 +13,18 @@ declare module 'axios' {
   }
 }
 
-const axiosInstance = axios.create({
+interface TypedAxiosInstance {
+  get<T>(url: string, config?: AxiosRequestConfig): Promise<T>;
+  post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>;
+  delete<T>(url: string, config?: AxiosRequestConfig): Promise<T>;
+}
+
+const rawAxios = axios.create({
   baseURL: config.apiUrl,
-  timeout: 30000,
-  withCredentials: true,
+  //timeout: 30000,
+  // Enable when cookie/session auth is implemented.
+  withCredentials: false,
 });
 
 // TODO: Enable token refresh queue when auth is implemented
@@ -34,7 +42,7 @@ const axiosInstance = axios.create({
 //   failedQueue = [];
 // };
 
-axiosInstance.interceptors.request.use(
+rawAxios.interceptors.request.use(
   (requestConfig) => {
     // TODO: Attach bearer token when auth is ready
     // const token = getAccessToken();
@@ -55,7 +63,7 @@ axiosInstance.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-axiosInstance.interceptors.response.use(
+rawAxios.interceptors.response.use(
   (response) => response.data,
   async (error) => {
     const originalRequest = error.config;
@@ -106,5 +114,7 @@ axiosInstance.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+const axiosInstance = rawAxios as unknown as TypedAxiosInstance;
 
 export default axiosInstance;
