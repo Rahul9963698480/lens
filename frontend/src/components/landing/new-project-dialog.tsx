@@ -12,8 +12,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { useCreateProject } from '@/hooks/use-projects'
+import { apiErrorMessage } from '@/lib/api/error-message'
 import { cn } from '@/lib/utils'
 import type { ProjectEngine } from '@/types/project'
+
 
 const DISCOVERY_CLOSE_DELAY_MS = 500
 
@@ -147,125 +149,133 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
 
   return (
     <>
-    <DiscoveringDatabaseDialog
-      open={open && isDiscovering}
-      isComplete={discoveryComplete}
-    />
-    <Dialog open={showFormDialog} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden sm:max-w-md">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>New project</DialogTitle>
-        </DialogHeader>
+      <DiscoveringDatabaseDialog
+        open={open && isDiscovering}
+        isComplete={discoveryComplete}
+      />
+      <Dialog open={showFormDialog} onOpenChange={handleOpenChange}>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden sm:max-w-md">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>New project</DialogTitle>
+          </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-5 px-5">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="project-name">
-              Project name <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="project-name"
-              value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
-              placeholder="Sales Database"
-              required
-            />
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-5 px-5">
+            {createMutation.isError && (
+              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive">
+                {apiErrorMessage(
+                  (createMutation.error as { response?: { data?: unknown } })?.response?.data,
+                  'Failed to create project. Please try again.',
+                )}
+              </div>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project-name">
+                Project name <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="project-name"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                placeholder="Sales Database"
+                required
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label>Database</Label>
+              <RadioGroup
+                value={engine}
+                onValueChange={handleDatabaseChange}
+                className="grid grid-cols-2 gap-2"
+              >
+                {DATABASE_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    htmlFor={`database-${option.value}`}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2.5 transition-colors',
+                      engine === option.value
+                        ? 'border-foreground/30 bg-muted/40'
+                        : 'border-border hover:border-foreground/20',
+                    )}
+                  >
+                    <RadioGroupItem
+                      id={`database-${option.value}`}
+                      value={option.value}
+                    />
+                    <span className="text-sm font-medium">{option.label}</span>
+                  </label>
+                ))}
+              </RadioGroup>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="connection-host">
+                  Host <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="connection-host"
+                  value={host}
+                  onChange={(event) => setHost(event.target.value)}
+                  placeholder="localhost"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="connection-db-name">
+                  Database name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="connection-db-name"
+                  value={dbName}
+                  onChange={(event) => setDbName(event.target.value)}
+                  placeholder={engine === 'mongodb' ? 'mydb' : 'sales'}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="connection-username">
+                  Username <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="connection-username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="user"
+                  autoComplete="username"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="connection-password">
+                  Password <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="connection-password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="password"
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <Label>Database</Label>
-            <RadioGroup
-              value={engine}
-              onValueChange={handleDatabaseChange}
-              className="grid grid-cols-2 gap-2"
+          <div className="flex shrink-0 justify-end pt-5">
+            <Button
+              type="button"
+              className="bg-brand-navy text-white hover:bg-brand-navy/90 disabled:opacity-50"
+              onClick={handleCreate}
+              disabled={!isFormValid || createMutation.isPending || isDiscovering}
             >
-              {DATABASE_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  htmlFor={`database-${option.value}`}
-                  className={cn(
-                    'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2.5 transition-colors',
-                    engine === option.value
-                      ? 'border-foreground/30 bg-muted/40'
-                      : 'border-border hover:border-foreground/20',
-                  )}
-                >
-                  <RadioGroupItem
-                    id={`database-${option.value}`}
-                    value={option.value}
-                  />
-                  <span className="text-sm font-medium">{option.label}</span>
-                </label>
-              ))}
-            </RadioGroup>
+              Create
+            </Button>
           </div>
-
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="connection-host">
-                Host <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="connection-host"
-                value={host}
-                onChange={(event) => setHost(event.target.value)}
-                placeholder="localhost"
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="connection-db-name">
-                Database name <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="connection-db-name"
-                value={dbName}
-                onChange={(event) => setDbName(event.target.value)}
-                placeholder={engine === 'mongodb' ? 'mydb' : 'sales'}
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="connection-username">
-                Username <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="connection-username"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="user"
-                autoComplete="username"
-                required
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="connection-password">
-                Password <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="connection-password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="password"
-                autoComplete="current-password"
-                required
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 justify-end pt-5">
-          <Button
-            type="button"
-            className="bg-brand-navy text-white hover:bg-brand-navy/90 disabled:opacity-50"
-            onClick={handleCreate}
-            disabled={!isFormValid || createMutation.isPending || isDiscovering}
-          >
-            Create
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

@@ -83,6 +83,18 @@ async def get_project(pool: asyncpg.Pool, project_id: UUID) -> asyncpg.Record | 
     )
 
 
+async def get_project_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | None:
+    return await pool.fetchrow(
+        """
+        SELECT id, name
+        FROM projects
+        WHERE LOWER(name) = LOWER($1)
+        """,
+        name,
+    )
+
+
+
 async def get_project_with_password(
     pool: asyncpg.Pool, project_id: UUID
 ) -> asyncpg.Record | None:
