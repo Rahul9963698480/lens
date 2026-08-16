@@ -1,23 +1,44 @@
 # XYMP Lens Backend
 
-API-only FastAPI backend with two separate connection paths:
+API-only FastAPI backend for connecting to customer databases, syncing schema metadata, and turning natural-language questions into read-only SQL.
 
-1. **App DB (Supabase Postgres)** — persistent `asyncpg` pool. Stores only `projects`.
-2. **External DB (per project)** — short-lived connectors via an adapter layer. Never pooled with the app DB.
+## Architecture
 
-Supported external engines today: **postgres**, **mongodb**. Adding MySQL/SQLite later means one new file under `app/db/connectors/`.
+1. **App DB (Supabase Postgres)** — persistent `asyncpg` pool. Stores `projects` and `table_schema_catalog`.
+2. **External DB (per project)** — short-lived connectors for schema sync, preview, and SQL execution. Never pooled with the app DB.
+3. **SQL agent** — Agno + OpenAI. Reads `table_schema_catalog` to generate SQL. Execution is a separate API call with validation.
+
+Supported external engines: **postgres**, **mongodb**. SQL generation and execution work on **postgres** projects only.
 
 There is no ORM and no Alembic. Schema changes are plain SQL under `supabase/migrations/`, applied with the Supabase CLI.
+
+### Natural language → SQL → table (product flow)
+
+```
+User question
+    → POST /projects/{id}/sql/generate   (LLM + introspect_schema → SQL text)
+    → User reviews / edits SQL in UI
+    → POST /projects/{id}/sql/execute    (validate → run on customer DB → table)
+```
+
+Generation never connects to the customer database. It only reads `table_schema_catalog` from Supabase. Execution validates SQL first, then opens a short-lived connection to the customer's Postgres.
 
 ## Setup
 
 ```bash
-conda create -n xymp_lens_backend python=3.12 -y
-conda activate xymp_lens_backend
+python -m venv .venv
+# Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env and set SUPABASE_DB_URL (prefer the pooler URI from Supabase → Settings → Database)
 ```
+
+Set in `.env`:
+
+| Variable | Purpose |
+|---|---|
+| `SUPABASE_DB_URL` | App DB connection (prefer Supabase pooler URI) |
+| `OPENAI_API_KEY` | Required for `/sql/generate` |
+| `MODEL_ID` | Optional, defaults to `gpt-4o` |
 
 `SUPABASE_DB_URL` format (pooler recommended on Windows):
 
@@ -28,8 +49,6 @@ postgresql://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.co
 Do **not** put anon/service_role API keys here.
 
 ### Supabase CLI
-
-Install from GitHub releases (`%LOCALAPPDATA%\supabase-cli` on this machine). Verify:
 
 ```bash
 supabase --version
@@ -53,11 +72,12 @@ Current migrations:
 - `20260803000002_create_projects_table.sql`
 - `20260803000003_add_projects_engine.sql`
 - `20260803000004_drop_users_and_project_user_id.sql`
+- `20260806000005_create_table_schema_catalog.sql`
+- `20260806000006_add_schema_catalog_annotations.sql`
 
 ## Run the API
 
 ```bash
-conda activate xymp_lens_backend
 uvicorn app.main:app --reload
 ```
 
@@ -66,14 +86,74 @@ uvicorn app.main:app --reload
 
 ## Endpoints
 
+### Projects
+
 | Method | Path | Notes |
 |--------|------|--------|
-| `POST` | `/projects` | Requires `engine`; port inferred from engine; tests external DB first; `400` `{ "error": "..." }` on failure |
+| `POST` | `/projects` | Create project, test external DB, initial schema sync |
 | `GET` | `/projects` | List projects (never includes `db_password`) |
 | `DELETE` | `/projects/{project_id}` | Hard delete |
-| `GET` | `/projects/{project_id}/preview` | Sample tables/collections from the external DB |
+| `GET` | `/projects/{project_id}/preview` | Sample rows from external DB |
 
 Default ports (server-side): `postgres` → `5432`, `mongodb` → `27017`. Clients do not send `db_port`.
+
+### Schema catalog
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/projects/{project_id}/schema/sync` | Re-extract schema into `table_schema_catalog` |
+| `GET` | `/projects/{project_id}/schema` | Read stored catalog |
+| `PATCH` | `/projects/{project_id}/schema/{table_name}` | Table annotations |
+| `PATCH` | `/projects/{project_id}/schema/{table_name}/columns/{column_name}` | Column annotations |
+
+### SQL agent
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/projects/{project_id}/sql/generate` | Natural language → SQL (requires `OPENAI_API_KEY`) |
+| `POST` | `/projects/{project_id}/sql/execute` | Run validated read-only SQL on customer Postgres |
+
+#### Generate SQL
+
+```http
+POST /projects/{project_id}/sql/generate
+Content-Type: application/json
+
+{ "question": "Show top 5 customers by total order amount" }
+```
+
+```json
+{ "sql": "SELECT ..." }
+```
+
+The agent calls `introspect_schema` against `table_schema_catalog` (Supabase only) before writing SQL.
+
+#### Execute SQL
+
+```http
+POST /projects/{project_id}/sql/execute
+Content-Type: application/json
+
+{ "sql": "SELECT * FROM customer LIMIT 5" }
+```
+
+```json
+{
+  "columns": ["id", "name"],
+  "rows": [{ "id": 1, "name": "Alice" }],
+  "row_count": 1
+}
+```
+
+**Execution rules** (`app/db/sql_validation.py`):
+
+- Only `SELECT` / `WITH` queries
+- Blocks `INSERT`, `UPDATE`, `DELETE`, `DROP`, and other write/admin keywords
+- Single statement only (no `;` chaining)
+- 30s statement timeout, max 1000 rows returned
+- Postgres projects only
+
+The LLM is not involved in execution. SQL comes only from the request body.
 
 ### Example: create a Postgres project
 
@@ -90,7 +170,7 @@ Default ports (server-side): `postgres` → `5432`, `mongodb` → `27017`. Clien
 
 ### Example: create a MongoDB Atlas project
 
-URI is built from host + username + password + db_name (`mongodb+srv://` when host looks like Atlas). No raw connection-string field.
+URI is built from host + username + password + db_name (`mongodb+srv://` when host looks like Atlas).
 
 ```json
 {
@@ -105,10 +185,23 @@ URI is built from host + username + password + db_name (`mongodb+srv://` when ho
 
 Preview response shape is engine-agnostic: `{ project_id, tables: [{ table_name, columns, rows | error }] }` (Mongo collections appear as `table_name`).
 
-`db_password` is stored in plaintext for now — intentional tradeoff with a TODO to encrypt before production.
+## Key modules
+
+| Path | Role |
+|------|------|
+| `app/api/sql_routes.py` | `/sql/generate` and `/sql/execute` endpoints |
+| `app/agent/sql_generator.py` | Agno agent — NL to SQL |
+| `app/agent/introspect_schema.py` | Reads `table_schema_catalog` (asyncpg) |
+| `app/agent/sql_executor.py` | API wrapper for execution |
+| `app/db/query_runner.py` | Validates SQL, connects to customer DB, returns rows |
+| `app/db/sql_validation.py` | Read-only SQL checks |
+| `app/db/connectors/` | External DB adapters (`postgres.py`, `mongodb.py`) |
+
+`app/agent/run_sql_query.py` is an unused Agno tool scaffold for a future agent-orchestrated execute path. The current product uses the direct `/sql/execute` API instead.
 
 ## Notes
 
 - No frontend in this repo.
 - App DB pool and external connectors never share a pool or connection.
-- Connector adapters live in `app/db/connectors/` (`base.py`, `factory.py`, `postgres.py`, `mongodb.py`).
+- All Postgres I/O uses **asyncpg** (no SQLAlchemy).
+- `db_password` is stored in plaintext for now — intentional tradeoff with a TODO to encrypt before production.
