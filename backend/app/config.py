@@ -5,7 +5,7 @@ load_dotenv()
 
 
 def normalize_postgres_url(url: str) -> str:
-    """Strip SQLAlchemy-style dialect suffixes so asyncpg accepts the DSN."""
+    """Strip driver-specific dialect suffixes so asyncpg accepts the DSN."""
     for prefix in ("postgresql+asyncpg://", "postgresql+psycopg://", "postgres+asyncpg://"):
         if url.startswith(prefix):
             return "postgresql://" + url.split("://", 1)[1]
@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "XYMP Lens Backend"
     SUPABASE_DB_URL: str
+    OPENAI_API_KEY: str = ""
+    MODEL_ID: str = "gpt-4o"
 
     @property
     def asyncpg_dsn(self) -> str:

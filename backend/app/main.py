@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import projects
+from app.api import projects, sql_routes
 from app.config import settings
 from app.db import app_db
 
@@ -30,6 +30,7 @@ app.add_middleware(
 
 # TODO: add auth back
 app.include_router(projects.router)
+app.include_router(sql_routes.router)
 
 
 @app.get("/health")
