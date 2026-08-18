@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { AxiosError } from 'axios'
+
 import { DiscoveringDatabaseDialog } from '@/components/landing/discovering-database-dialog'
 import { Button } from '@/components/ui/button'
 import {
@@ -43,6 +45,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
   const [dbName, setDbName] = useState(INITIAL_FORM.dbName)
   const [username, setUsername] = useState(INITIAL_FORM.username)
   const [password, setPassword] = useState(INITIAL_FORM.password)
+  const [nameError, setNameError] = useState('')
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [discoveryComplete, setDiscoveryComplete] = useState(false)
   const closeTimeoutRef = useRef<number | null>(null)
@@ -54,6 +57,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     setDbName(INITIAL_FORM.dbName)
     setUsername(INITIAL_FORM.username)
     setPassword(INITIAL_FORM.password)
+    setNameError('')
   }, [])
 
   const finishDiscovery = useCallback(() => {
@@ -70,9 +74,22 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     onSuccess: () => {
       finishDiscovery()
     },
-    onError: () => {
+    onError: (error: unknown) => {
       setIsDiscovering(false)
       setDiscoveryComplete(false)
+
+      // Show inline error for duplicate name
+      if (error instanceof AxiosError) {
+        const errorMsg =
+          error.response?.data?.error ?? error.response?.data?.detail ?? ''
+        if (
+          typeof errorMsg === 'string' &&
+          (errorMsg.toLowerCase().includes('exists') ||
+           errorMsg.toLowerCase().includes('exits'))
+        ) {
+          setNameError(errorMsg)
+        }
+      }
     },
   })
 
@@ -99,9 +116,18 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     setPassword('')
   }, [])
 
+  const handleProjectNameChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setProjectName(event.target.value)
+      if (nameError) setNameError('')
+    },
+    [nameError],
+  )
+
   const handleCreate = useCallback(() => {
     if (!isFormValid || createMutation.isPending || isDiscovering) return
 
+    setNameError('')
     setIsDiscovering(true)
     setDiscoveryComplete(false)
     createMutation.mutate({
@@ -165,10 +191,14 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
             <Input
               id="project-name"
               value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
+              onChange={handleProjectNameChange}
               placeholder="Sales Database"
               required
+              className={cn(nameError && 'border-destructive focus-visible:ring-destructive')}
             />
+            {nameError && (
+              <p className="text-sm text-destructive">{nameError}</p>
+            )}
           </div>
 
           <div className="flex flex-col gap-2">

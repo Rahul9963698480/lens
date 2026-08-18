@@ -1,5 +1,6 @@
 from uuid import UUID
 
+import asyncpg
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -34,6 +35,13 @@ async def create_project(
     pool: Pool = Depends(get_pool),
 ):
     # TODO: add auth back
+    existing = await app_db.get_project_by_name(pool, payload.name)
+    if existing:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": f"A project named '{payload.name}' already exists."},
+        )
+
     try:
         db_port = resolve_db_port(payload.engine)
         connector = get_connector(
@@ -57,16 +65,22 @@ async def create_project(
             content={"error": message},
         )
 
-    row = await app_db.create_project(
-        pool,
-        name=payload.name,
-        engine=payload.engine,
-        db_host=payload.db_host,
-        db_port=db_port,
-        db_name=payload.db_name,
-        db_username=payload.db_username,
-        db_password=payload.db_password,
-    )
+    try:
+        row = await app_db.create_project(
+            pool,
+            name=payload.name,
+            engine=payload.engine,
+            db_host=payload.db_host,
+            db_port=db_port,
+            db_name=payload.db_name,
+            db_username=payload.db_username,
+            db_password=payload.db_password,
+        )
+    except asyncpg.exceptions.UniqueViolationError:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": f"A project named '{payload.name}' already exists."},
+        )
 
     try:
         await schema_catalog.extract_and_store_schema(

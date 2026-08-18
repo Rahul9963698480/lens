@@ -42,7 +42,7 @@ export function useProjectPreview(projectId: string | undefined) {
 
 type UseCreateProjectOptions = {
   onSuccess?: () => void
-  onError?: () => void
+  onError?: (error: unknown) => void
 }
 
 export function useCreateProject(options?: UseCreateProjectOptions) {
@@ -56,12 +56,13 @@ export function useCreateProject(options?: UseCreateProjectOptions) {
         queryClient.invalidateQueries({ queryKey: projectKeys.all })
         options?.onSuccess?.()
       },
-      onError: () => {
-        options?.onError?.()
+      onError: (error) => {
+        options?.onError?.(error)
       },
     },
   )
 }
+
 
 type UpdateTableAnnotationsVariables = {
   projectId: string
