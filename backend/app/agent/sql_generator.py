@@ -8,9 +8,11 @@ from uuid import UUID
 import asyncpg
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
+from agno.utils.log import logger
 
 from app.agent.introspect_schema import create_introspect_schema_tool
 from app.config import settings
+from app.db.learnings import get_relevant_learnings
 
 SQL_FENCE_RE = re.compile(r"```sql\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 GENERIC_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)```", re.DOTALL)
@@ -84,12 +86,25 @@ def _build_agent(project_id: UUID, pool: asyncpg.Pool) -> Agent:
     )
     return Agent(
         name="SQL Generator Agent",
-        model=OpenAIChat(id=settings.MODEL_ID),
+        model=OpenAIChat(id=settings.MODEL_ID, api_key=settings.OPENAI_API_KEY),
         tools=[introspect_schema],
         instructions=AGENT_INSTRUCTIONS,
         expected_output="A single ```sql code block containing only the SQL query. No other text.",
         markdown=True,
     )
+
+
+def _format_learnings_context(learnings: list[asyncpg.Record]) -> str:
+    lines: list[str] = []
+    for row in learnings:
+        question = row["question"]
+        confirmed_sql = row["confirmed_sql"]
+        rule_text = row["rule_text"]
+        if confirmed_sql:
+            lines.append(f"Similar past question: '{question}' -> SQL: {confirmed_sql}")
+        if rule_text:
+            lines.append(f"Also remember: {rule_text}")
+    return "\n".join(lines)
 
 
 async def generate_sql_for_project(
@@ -98,8 +113,14 @@ async def generate_sql_for_project(
     pool: asyncpg.Pool,
 ) -> str:
     """Run the schema agent for a project and return generated SQL."""
+    learnings = await get_relevant_learnings(pool, project_id, question)
+    context = _format_learnings_context(learnings)
+    prompt = f"{context}\n\nUser question: {question}" if context else question
+    # Temporary: verify retrieval is prepended before the agent runs (STEP 8).
+    logger.info(f"Assembled agent prompt:\n{prompt}")
+
     agent = _build_agent(project_id, pool)
-    response = await agent.arun(question)
+    response = await agent.arun(prompt)
     sql = extract_sql(str(response.content or ""))
     if not sql:
         raise ValueError("Agent did not return SQL.")

@@ -106,6 +106,9 @@ def create_introspect_schema_tool(project_id: UUID | str, pool: asyncpg.Pool):
         """
         requested = (table_name or "all").strip()
         list_all = requested.lower() in {"all", "*", "none", ""}
+        logger.info(
+            f"introspect_schema called: project_id={_project_id} table_name={requested!r}"
+        )
 
         if not list_all and not _SAFE_TABLE_NAME.match(requested):
             return _json_response(

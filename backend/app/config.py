@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_ENV_FILE = _BACKEND_DIR / ".env"
+load_dotenv(_ENV_FILE, override=True)
 
 
 def normalize_postgres_url(url: str) -> str:
@@ -13,7 +17,11 @@ def normalize_postgres_url(url: str) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     APP_NAME: str = "XYMP Lens Backend"
     SUPABASE_DB_URL: str
