@@ -20,7 +20,7 @@ export function TableExplorer({
   return (
     <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r bg-background">
       <div className="border-b px-3 py-2.5">
-        <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+        <span className="text-[10px] font-semibold tracking-wider text-foreground/80 uppercase">
           Explorer
         </span>
       </div>
@@ -33,11 +33,11 @@ export function TableExplorer({
             className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-muted/60"
           >
             {publicExpanded ? (
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              <ChevronDown className="size-3.5 shrink-0 text-foreground/70" />
             ) : (
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <ChevronRight className="size-3.5 shrink-0 text-foreground/70" />
             )}
-            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+            <Folder className="size-3.5 shrink-0 text-foreground/70" />
             <span>public</span>
           </button>
 
@@ -46,7 +46,7 @@ export function TableExplorer({
               <button
                 type="button"
                 onClick={() => setTablesExpanded((value) => !value)}
-                className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-foreground/80 hover:bg-muted/60 hover:text-foreground"
               >
                 {tablesExpanded ? (
                   <ChevronDown className="size-3 shrink-0" />
@@ -55,7 +55,7 @@ export function TableExplorer({
                 )}
                 <Table2 className="size-3 shrink-0" />
                 <span>Tables</span>
-                <span className="ml-auto text-[11px] tabular-nums text-muted-foreground/70">
+                <span className="ml-auto text-[11px] tabular-nums text-foreground/55">
                   {tables.length}
                 </span>
               </button>
@@ -71,7 +71,7 @@ export function TableExplorer({
                           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
                           selectedTable === tableName
                             ? 'bg-muted font-medium text-foreground'
-                            : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                            : 'text-foreground/85 hover:bg-muted/60 hover:text-foreground',
                         )}
                       >
                         <Table2 className="size-3.5 shrink-0" />
