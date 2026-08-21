@@ -287,7 +287,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         <div className="flex shrink-0 justify-end pt-5">
           <Button
             type="button"
-            className="bg-brand-navy text-white hover:bg-brand-navy/90 disabled:opacity-50"
+            className="rounded-full px-4 disabled:opacity-50"
             onClick={handleCreate}
             disabled={!isFormValid || createMutation.isPending || isDiscovering}
           >

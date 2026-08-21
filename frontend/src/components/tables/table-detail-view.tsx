@@ -47,11 +47,19 @@ export function TableDetailView({
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 py-4">
         <Tabs defaultValue="preview" className="flex min-h-0 flex-1 flex-col">
-          <TabsList className="mb-4 w-fit shrink-0">
-            <TabsTrigger value="table-description">Table Description</TabsTrigger>
-            <TabsTrigger value="preview">Preview</TabsTrigger>
-            <TabsTrigger value="columns">Columns</TabsTrigger>
-            <TabsTrigger value="relationships">Relationships</TabsTrigger>
+          <TabsList className="mb-4 h-9 w-fit shrink-0 rounded-full px-1">
+            <TabsTrigger value="preview" className="rounded-full px-3">
+              Preview
+            </TabsTrigger>
+            <TabsTrigger value="table-description" className="rounded-full px-3">
+              Table Description
+            </TabsTrigger>
+            <TabsTrigger value="columns" className="rounded-full px-3">
+              Columns
+            </TabsTrigger>
+            <TabsTrigger value="relationships" className="rounded-full px-3">
+              Relationships
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="table-description" className="min-h-0 overflow-y-auto">

@@ -16,13 +16,13 @@ const ENGINE_META = {
     label: 'PostgreSQL',
     icon: Database,
     badgeClass: 'bg-brand-navy/10 text-brand-navy border-brand-navy/20',
-    iconClass: 'bg-brand-navy/10 text-brand-navy',
+    iconClass: 'bg-brand-teal text-white',
   },
   mongodb: {
     label: 'MongoDB',
     icon: Leaf,
     badgeClass: 'bg-brand-teal/10 text-brand-teal border-brand-teal/20',
-    iconClass: 'bg-brand-teal/10 text-brand-teal',
+    iconClass: 'bg-brand-teal text-white',
   },
 } as const
 
@@ -32,7 +32,7 @@ function getEngineMeta(engine: string) {
     label: engine,
     icon: Database,
     badgeClass: 'bg-muted text-muted-foreground border-border',
-    iconClass: 'bg-muted text-muted-foreground',
+    iconClass: 'bg-brand-teal text-white',
   }
 }
 
@@ -80,7 +80,7 @@ function ProjectCard({ project }: { project: Project }) {
       </h3>
 
       <p className="mt-1 truncate text-sm text-muted-foreground">
-        {project.db_host}
+        {project.db_host ?? '—'}
         <span className="text-muted-foreground/60"> / </span>
         {project.db_name}
       </p>
