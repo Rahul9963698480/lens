@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -12,6 +12,14 @@ class ProjectCreate(BaseModel):
     db_name: str
     db_username: str
     db_password: str
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Project name is required")
+        return normalized
 
 
 class ProjectResponse(BaseModel):

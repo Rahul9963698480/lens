@@ -20,6 +20,8 @@ from app.schemas.project import (
 
 router = APIRouter(tags=["projects"])
 
+PROJECT_NAME_EXISTS_ERROR = "Project name already exists"
+
 
 def _catalog_response(project_id: UUID, rows: list[dict]) -> ProjectSchemaResponse:
     return ProjectSchemaResponse(
@@ -39,7 +41,7 @@ async def create_project(
     if existing:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": f"A project named '{payload.name}' already exists."},
+            content={"error": PROJECT_NAME_EXISTS_ERROR},
         )
 
     try:
@@ -79,7 +81,7 @@ async def create_project(
     except asyncpg.exceptions.UniqueViolationError:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": f"A project named '{payload.name}' already exists."},
+            content={"error": PROJECT_NAME_EXISTS_ERROR},
         )
 
     try:

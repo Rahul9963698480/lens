@@ -101,13 +101,13 @@ async def get_project_with_password(
 async def get_project_by_name(
     pool: asyncpg.Pool, name: str
 ) -> asyncpg.Record | None:
-    """Look up a project by its unique name."""
+    """Look up a project by name (case-insensitive, trimmed)."""
     return await pool.fetchrow(
         """
         SELECT id, name, engine, db_host, db_port, db_name, db_username,
                status, created_at
         FROM projects
-        WHERE name = $1
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
         """,
         name,
     )
