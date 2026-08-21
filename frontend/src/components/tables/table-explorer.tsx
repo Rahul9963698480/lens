@@ -70,7 +70,7 @@ export function TableExplorer({
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
                           selectedTable === tableName
-                            ? 'bg-muted font-medium text-foreground'
+                            ? 'bg-primary/10 font-medium text-primary'
                             : 'text-foreground/85 hover:bg-muted/60 hover:text-foreground',
                         )}
                       >

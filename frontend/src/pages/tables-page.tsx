@@ -73,17 +73,17 @@ export function TablesPage() {
         <nav
           role="tablist"
           aria-label="Project view"
-          className="flex items-center gap-1"
+          className="flex items-center rounded-full bg-muted p-1"
         >
           <button
             type="button"
             role="tab"
             aria-selected={view === 'workspace'}
             className={cn(
-              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              'rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors',
               view === 'workspace'
-                ? 'bg-muted text-foreground'
-                : 'text-foreground/80 hover:bg-muted/60 hover:text-foreground',
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-foreground/70 hover:bg-background/60 hover:text-foreground',
             )}
             onClick={() => setView('workspace')}
           >
@@ -94,10 +94,10 @@ export function TablesPage() {
             role="tab"
             aria-selected={view === 'playground'}
             className={cn(
-              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              'rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors',
               view === 'playground'
-                ? 'bg-muted text-foreground'
-                : 'text-foreground/80 hover:bg-muted/60 hover:text-foreground',
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-foreground/70 hover:bg-background/60 hover:text-foreground',
             )}
             onClick={() => setView('playground')}
           >
