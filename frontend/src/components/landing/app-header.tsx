@@ -22,7 +22,7 @@ export function AppHeader({ onCreateProject }: AppHeaderProps) {
 
         <Button
           size="sm"
-          className="shrink-0 bg-brand-navy px-2.5 text-white hover:bg-brand-navy/90 sm:h-8 sm:px-2.5"
+          className="shrink-0 rounded-full px-3 text-white sm:h-8 sm:px-3.5"
           onClick={onCreateProject}
         >
           <Plus data-icon="inline-start" />
