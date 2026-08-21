@@ -11,6 +11,7 @@ import type {
   TableAnnotationPayload,
   TableSchema,
 } from '@/types/project'
+import type { SqlExecuteResponse, SqlGenerateResponse } from '@/types/sql'
 
 export const projectKeys = {
   all: ['projects'] as const,
@@ -84,6 +85,61 @@ export function useUpdateTableAnnotations(projectId: string | undefined) {
         }
       },
     },
+  )
+}
+
+type GenerateSqlVariables = {
+  projectId: string
+  question: string
+}
+
+export function useGenerateSql() {
+  return useApiMutation<GenerateSqlVariables, SqlGenerateResponse>(
+    ({ projectId, question }) => projectsApi.generateSql(projectId, { question }),
+    { successMessage: false },
+  )
+}
+
+type ExecuteSqlVariables = {
+  projectId: string
+  sql: string
+  attemptId: string
+}
+
+export function useExecuteSql() {
+  return useApiMutation<ExecuteSqlVariables, SqlExecuteResponse>(
+    ({ projectId, sql, attemptId }) =>
+      projectsApi.executeSql(projectId, { sql, attempt_id: attemptId }),
+    { successMessage: false },
+  )
+}
+
+type SubmitFeedbackVariables = {
+  projectId: string
+  attemptId: string
+  feedback: 'correct' | 'incorrect'
+}
+
+export function useSubmitFeedback() {
+  return useApiMutation<SubmitFeedbackVariables, void>(
+    ({ projectId, attemptId, feedback }) =>
+      projectsApi.submitFeedback(projectId, attemptId, feedback),
+    { successMessage: false },
+  )
+}
+
+type ConfirmFeedbackVariables = {
+  projectId: string
+  attemptId: string
+  confirmed_sql: string
+  rule_text: string
+}
+
+export function useConfirmFeedback() {
+  return useApiMutation<ConfirmFeedbackVariables, void>(
+    ({ projectId, attemptId, confirmed_sql, rule_text }) =>
+      projectsApi.confirmFeedback(projectId, attemptId, { confirmed_sql, rule_text }),
+    { successMessage: 'Feedback confirmed' },
   )
 }
 

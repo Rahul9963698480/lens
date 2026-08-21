@@ -82,9 +82,9 @@ export function PreviewTab({
                     {isPrimaryKey && (
                       <KeyRound className="size-3 shrink-0 text-amber-500" strokeWidth={2.25} />
                     )}
-                    <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                    <span className="text-[11px] font-semibold tracking-wide text-foreground uppercase">
                       {column}
-                      <span className="ml-1.5 font-normal text-muted-foreground/50">
+                      <span className="ml-1.5 font-normal text-foreground/55">
                         {meta ? formatColumnType(getColumnType(meta)) : 'UNKNOWN'}
                       </span>
                     </span>
