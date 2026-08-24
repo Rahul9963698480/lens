@@ -1,4 +1,4 @@
-import { ArrowUpRight, Database, Leaf, Plus } from 'lucide-react'
+import { ArrowUpRight, Database, FileSpreadsheet, Leaf, Plus } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,12 @@ const ENGINE_META = {
     label: 'MongoDB',
     icon: Leaf,
     badgeClass: 'bg-brand-teal/10 text-brand-teal border-brand-teal/20',
+    iconClass: 'bg-brand-teal text-white',
+  },
+  xlsx: {
+    label: 'Excel',
+    icon: FileSpreadsheet,
+    badgeClass: 'bg-emerald-500/10 text-emerald-800 border-emerald-500/20',
     iconClass: 'bg-brand-teal text-white',
   },
 } as const
@@ -80,9 +86,15 @@ function ProjectCard({ project }: { project: Project }) {
       </h3>
 
       <p className="mt-1 truncate text-sm text-muted-foreground">
-        {project.db_host ?? '—'}
-        <span className="text-muted-foreground/60"> / </span>
-        {project.db_name}
+        {project.engine.toLowerCase() === 'xlsx' ? (
+          project.db_name
+        ) : (
+          <>
+            {project.db_host ?? '—'}
+            <span className="text-muted-foreground/60"> / </span>
+            {project.db_name}
+          </>
+        )}
       </p>
 
       <div className="mt-5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -115,7 +127,7 @@ function CreateProjectCard({ onClick }: { onClick: () => void }) {
       <div>
         <p className="text-sm font-medium text-foreground">Create project</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Connect a new database
+          Connect a database or spreadsheet
         </p>
       </div>
     </button>

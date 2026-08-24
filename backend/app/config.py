@@ -25,8 +25,12 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "XYMP Lens Backend"
     SUPABASE_DB_URL: str
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_STORAGE_BUCKET: str = "xlsx-projects"
     OPENAI_API_KEY: str = ""
     MODEL_ID: str = "gpt-4o"
+    RELATIONSHIP_VERIFY_MODEL_ID: str = "gpt-4o-mini"
 
     @property
     def asyncpg_dsn(self) -> str:

@@ -24,6 +24,16 @@ class DBConnector(ABC):
         """
 
     @abstractmethod
+    async def execute_query(self, sql: str, *, max_rows: int = 1000) -> dict[str, Any]:
+        """
+        Run a validated read-only SQL query.
+
+        Return {"status": "ok", "columns": [...], "rows": [...], "row_count": int}.
+        Raise ValueError when the engine does not support SQL execution or
+        the query fails.
+        """
+
+    @abstractmethod
     async def get_schema(self) -> dict[str, Any]:
         """
         Return structure-only schema for all tables/collections:
@@ -47,12 +57,12 @@ class DBConnector(ABC):
               "from_column": str,
               "to_table": str,
               "to_column": str,
-              "cardinality": "many_to_one" | "one_to_one" | "one_to_many",
-              "confidence": "declared" | "inferred",
+              "cardinality": "many_to_one" | "one_to_one" | "one_to_many" | "unknown",
+              "confidence": "declared" | "inferred" | "inferred_from_data",
             }
           ],
           # Present only when any table is inferred or any relationship
-          # has confidence "inferred":
+          # has confidence "inferred" or "inferred_from_data":
           "note": str | None,
         }
         """

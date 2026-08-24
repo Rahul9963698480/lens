@@ -39,6 +39,7 @@ Set in `.env`:
 | `SUPABASE_DB_URL` | App DB connection (prefer Supabase pooler URI) |
 | `OPENAI_API_KEY` | Required for `/sql/generate` |
 | `MODEL_ID` | Optional, defaults to `gpt-4o` |
+| `RELATIONSHIP_VERIFY_MODEL_ID` | Optional, cheap model for xlsx relationship verification (defaults to `gpt-4o-mini`) |
 
 `SUPABASE_DB_URL` format (pooler recommended on Windows):
 
@@ -196,8 +197,6 @@ Preview response shape is engine-agnostic: `{ project_id, tables: [{ table_name,
 | `app/db/query_runner.py` | Validates SQL, connects to customer DB, returns rows |
 | `app/db/sql_validation.py` | Read-only SQL checks |
 | `app/db/connectors/` | External DB adapters (`postgres.py`, `mongodb.py`) |
-
-`app/agent/run_sql_query.py` is an unused Agno tool scaffold for a future agent-orchestrated execute path. The current product uses the direct `/sql/execute` API instead.
 
 ## Notes
 

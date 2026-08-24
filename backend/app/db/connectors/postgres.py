@@ -8,6 +8,9 @@ from typing import Any
 import asyncpg
 
 from app.db.connectors.base import DBConnector
+from app.db.sql_validation import validate_readonly_sql
+
+STATEMENT_TIMEOUT_MS = 30_000
 
 
 def _quote_ident(name: str) -> str:
@@ -270,6 +273,35 @@ class PostgresConnector(DBConnector):
                 )
 
             return {"tables": tables, "relationships": relationships}
+        finally:
+            if conn is not None:
+                await conn.close()
+
+    async def execute_query(self, sql: str, *, max_rows: int = 1000) -> dict[str, Any]:
+        query = validate_readonly_sql(sql)
+        conn: asyncpg.Connection | None = None
+        try:
+            conn = await self._connect()
+            await conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+            records = await conn.fetch(query)
+            if len(records) > max_rows:
+                records = records[:max_rows]
+
+            columns = list(records[0].keys()) if records else []
+            rows = [
+                {col: _serialize_value(record[col]) for col in columns}
+                for record in records
+            ]
+            return {
+                "status": "ok",
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+            }
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(_readable_error(exc)) from exc
         finally:
             if conn is not None:
                 await conn.close()

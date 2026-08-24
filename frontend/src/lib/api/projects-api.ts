@@ -1,6 +1,7 @@
 import type {
   ColumnAnnotationPayload,
   CreateProjectPayload,
+  CreateXlsxProjectPayload,
   Project,
   ProjectPreviewResponse,
   ProjectSchemaResponse,
@@ -20,6 +21,12 @@ const projectsApi = {
   list: () => axiosInstance.get<Project[]>('/projects'),
   create: (payload: CreateProjectPayload) =>
     axiosInstance.post<Project>('/projects', payload),
+  uploadXlsx: ({ name, file }: CreateXlsxProjectPayload) => {
+    const formData = new FormData()
+    formData.append('name', name)
+    formData.append('file', file)
+    return axiosInstance.post<Project>('/projects/upload-xlsx', formData)
+  },
   delete: (projectId: string) =>
     axiosInstance.delete<void>(`/projects/${projectId}`),
   getSchema: (projectId: string) =>

@@ -63,7 +63,6 @@ async def _record_execution(
     )
 
 
-# The helper function handles core business logic, project validation, API key checks, and exception translation into HTTP status codes (404, 503, 502).
 async def _run_sql_agent(project_id: UUID, question: str, pool: Pool) -> SqlGenerateResponse:
     await _require_project(pool, project_id)
 

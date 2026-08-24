@@ -415,3 +415,6 @@ class MongoDBConnector(DBConnector):
         finally:
             if client is not None:
                 client.close()
+
+    async def execute_query(self, sql: str, *, max_rows: int = 1000) -> dict[str, Any]:
+        raise ValueError("SQL execution is not supported for this engine.")

@@ -5,6 +5,7 @@ import { projectsApi } from '@/lib/api'
 import type {
   ColumnAnnotationPayload,
   CreateProjectPayload,
+  CreateXlsxProjectPayload,
   Project,
   ProjectPreviewResponse,
   ProjectSchemaResponse,
@@ -51,6 +52,24 @@ export function useCreateProject(options?: UseCreateProjectOptions) {
 
   return useApiMutation<CreateProjectPayload, Project>(
     (payload) => projectsApi.create(payload),
+    {
+      successMessage: 'Project created',
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: projectKeys.all })
+        options?.onSuccess?.()
+      },
+      onError: () => {
+        options?.onError?.()
+      },
+    },
+  )
+}
+
+export function useUploadXlsxProject(options?: UseCreateProjectOptions) {
+  const queryClient = useQueryClient()
+
+  return useApiMutation<CreateXlsxProjectPayload, Project>(
+    (payload) => projectsApi.uploadXlsx(payload),
     {
       successMessage: 'Project created',
       onSuccess: () => {

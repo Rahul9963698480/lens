@@ -2,27 +2,17 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SqlGenerateRequest(BaseModel):
-    question: str = Field(..., min_length=1)
+    """Accepts `question`, or `message` from older chat clients."""
 
-
-class ProjectChatRequest(BaseModel):
-    """Accepts `question` or legacy `message` from older clients."""
-
-    question: str | None = Field(default=None, min_length=1)
-    message: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def require_question_or_message(self) -> "ProjectChatRequest":
-        if self.question:
-            return self
-        if self.message:
-            self.question = self.message
-            return self
-        raise ValueError("Either 'question' or 'message' is required")
+    question: str = Field(
+        ...,
+        min_length=1,
+        validation_alias=AliasChoices("question", "message"),
+    )
 
 
 class SqlGenerateResponse(BaseModel):

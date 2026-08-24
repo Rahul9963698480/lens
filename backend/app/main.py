@@ -1,11 +1,16 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import projects, sql_routes
 from app.config import settings
 from app.db import app_db
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -19,6 +24,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def log_request_validation_error(
+    request: Request, exc: RequestValidationError
+):
+    logger.warning(
+        "422 %s %s errors=%s body=%r",
+        request.method,
+        request.url.path,
+        exc.errors(),
+        exc.body,
+    )
+    return await request_validation_exception_handler(request, exc)
+
 
 app.add_middleware(
     CORSMiddleware,
