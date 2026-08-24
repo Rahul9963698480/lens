@@ -6,3 +6,8 @@ pydantic-settings>=2.6.0
 python-dotenv==1.0.1
 agno>=1.7.0
 openai>=1.0.0
+python-multipart>=0.0.9
+openpyxl>=3.1.0
+pandas>=2.2.0
+aiosqlite>=0.20.0
+supabase>=2.10.0

@@ -20,16 +20,13 @@ class ProjectResponse(BaseModel):
     id: UUID
     name: str
     engine: str
-    db_host: str
-    db_port: int
+    db_host: str | None = None
+    db_port: int | None = None
     db_name: str
-    db_username: str
+    db_username: str | None = None
+    file_path: str | None = None
     status: str
     created_at: datetime
-
-
-class ErrorResponse(BaseModel):
-    error: str
 
 
 class TablePreview(BaseModel):
@@ -66,8 +63,10 @@ class SchemaRelationship(BaseModel):
     from_column: str
     to_table: str
     to_column: str
-    cardinality: Literal["many_to_one", "one_to_one", "one_to_many"] = "many_to_one"
-    confidence: Literal["declared", "inferred"]
+    cardinality: Literal["many_to_one", "one_to_one", "one_to_many", "unknown"] = (
+        "many_to_one"
+    )
+    confidence: Literal["declared", "inferred", "inferred_from_data"]
 
 
 class CatalogTableSchema(BaseModel):

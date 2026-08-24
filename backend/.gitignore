@@ -11,3 +11,4 @@ build/
 supabase/.temp/
 .branches
 .temp
+app/assests/

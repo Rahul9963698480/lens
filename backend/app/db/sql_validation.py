@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-#_FORBIDDEN is a regex pattern that matches any SQL keywords that are not allowed in a read-only query. It is used to validate the SQL query before executing it. 
 _FORBIDDEN = re.compile(
     r"\b("
     r"insert|update|delete|drop|alter|create|truncate|grant|revoke|"

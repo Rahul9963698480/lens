@@ -42,8 +42,8 @@ export function LandingPage() {
           </div> */}
 
           <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-            Pick up where you left off or connect a new database to explore
-            schemas and data.
+            Pick up where you left off or connect a database or spreadsheet to
+            explore schemas and data.
           </p>
         </div>
 

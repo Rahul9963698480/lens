@@ -1,12 +1,16 @@
-from uuid import UUID
+import logging
+import tempfile
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from asyncpg import Pool
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from app.db import app_db, schema_catalog
 from app.db.app_db import get_pool
-from app.db.connectors import get_connector, resolve_db_port
+from app.db.connectors import get_connector, get_connector_from_project, resolve_db_port
+from app.db.connectors.sqlite_file import SQLiteFileConnector
 from app.schemas.project import (
     CatalogTableSchema,
     ColumnAnnotationUpdate,
@@ -16,6 +20,11 @@ from app.schemas.project import (
     ProjectSchemaResponse,
     TableAnnotationUpdate,
 )
+from app.storage.supabase_storage import delete_file, storage_object_path, upload_file
+from app.storage.xlsx_cache import evict_local_cache, local_sqlite_path, seed_local_cache
+from app.storage.xlsx_ingest import XlsxIngestError, workbook_to_sqlite
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["projects"])
 
@@ -26,6 +35,52 @@ def _catalog_response(project_id: UUID, rows: list[dict]) -> ProjectSchemaRespon
         db_name=rows[0]["db_name"],
         tables=[CatalogTableSchema(**row) for row in rows],
     )
+
+
+async def _cleanup_xlsx_artifacts(
+    *,
+    pool: Pool,
+    project_id: UUID,
+    storage_path: str,
+    sqlite_path: Path,
+    row_created: bool,
+    uploaded: bool,
+) -> None:
+    if row_created:
+        try:
+            await app_db.delete_project(pool, project_id)
+        except Exception:
+            logger.warning("Failed to delete xlsx project row %s during cleanup", project_id)
+    if uploaded:
+        try:
+            await delete_file(storage_path)
+        except Exception:
+            logger.warning("Failed to delete storage object %s during cleanup", storage_path)
+    try:
+        evict_local_cache(str(project_id))
+    except Exception:
+        logger.warning("Failed to evict local cache for %s during cleanup", project_id)
+    try:
+        if sqlite_path.exists():
+            sqlite_path.unlink()
+    except OSError:
+        logger.warning("Failed to delete local sqlite %s during cleanup", sqlite_path)
+
+
+async def _cleanup_xlsx_on_delete(engine: str, file_path: str | None, project_id: UUID) -> None:
+    if engine != "xlsx" or not file_path:
+        return
+    try:
+        await delete_file(file_path)
+    except Exception:
+        logger.warning(
+            "xlsx storage object already missing or delete failed: %s",
+            file_path,
+        )
+    try:
+        evict_local_cache(str(project_id))
+    except Exception:
+        logger.warning("xlsx local cache cleanup failed for project %s", project_id)
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -84,6 +139,101 @@ async def create_project(
     return ProjectResponse(**app_db.record_to_dict(row))
 
 
+@router.post(
+    "/projects/upload-xlsx",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_xlsx_project(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    user_id: str | None = Form(None),
+    pool: Pool = Depends(get_pool),
+):
+    # user_id is accepted for client compatibility; auth/users were removed.
+    _ = user_id
+    filename = file.filename or "workbook.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Only .xlsx files are supported."},
+        )
+
+    project_id = uuid4()
+    storage_path = storage_object_path(str(project_id))
+    sqlite_path = local_sqlite_path(str(project_id))
+    uploaded = False
+    row_created = False
+    xlsx_tmp: Path | None = None
+
+    try:
+        content = await file.read()
+        if not content:
+            raise XlsxIngestError("Uploaded file is empty.")
+
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp.write(content)
+            xlsx_tmp = Path(tmp.name)
+
+        workbook_to_sqlite(xlsx_tmp, sqlite_path)
+        await upload_file(storage_path, str(sqlite_path))
+        uploaded = True
+        seed_local_cache(str(project_id), str(sqlite_path))
+
+        row = await app_db.create_project(
+            pool,
+            name=name,
+            engine="xlsx",
+            db_host=None,
+            db_port=None,
+            db_name=filename,
+            db_username=None,
+            db_password=None,
+            file_path=storage_path,
+            project_id=project_id,
+        )
+        row_created = True
+
+        connector = SQLiteFileConnector(str(project_id), storage_path)
+        await schema_catalog.extract_and_store_schema(
+            pool, row["id"], row["db_name"], connector
+        )
+        return ProjectResponse(**app_db.record_to_dict(row))
+    except XlsxIngestError as exc:
+        await _cleanup_xlsx_artifacts(
+            pool=pool,
+            project_id=project_id,
+            storage_path=storage_path,
+            sqlite_path=sqlite_path,
+            row_created=row_created,
+            uploaded=uploaded,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": str(exc)},
+        )
+    except Exception:
+        await _cleanup_xlsx_artifacts(
+            pool=pool,
+            project_id=project_id,
+            storage_path=storage_path,
+            sqlite_path=sqlite_path,
+            row_created=row_created,
+            uploaded=uploaded,
+        )
+        logger.exception("xlsx upload failed for project %s", project_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to store or sync the spreadsheet project.",
+        ) from None
+    finally:
+        if xlsx_tmp is not None:
+            try:
+                xlsx_tmp.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Failed to delete temp xlsx %s", xlsx_tmp)
+
+
 @router.get("/projects", response_model=list[ProjectResponse])
 async def list_projects(
     pool: Pool = Depends(get_pool),
@@ -97,9 +247,15 @@ async def delete_project(
     project_id: UUID,
     pool: Pool = Depends(get_pool),
 ) -> None:
+    project = await app_db.get_project(pool, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
     deleted = await app_db.delete_project(pool, project_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    await _cleanup_xlsx_on_delete(project["engine"], project["file_path"], project_id)
 
 
 @router.get(
@@ -116,14 +272,7 @@ async def preview_project(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     try:
-        connector = get_connector(
-            project["engine"],
-            project["db_host"],
-            project["db_port"],
-            project["db_name"],
-            project["db_username"],
-            project["db_password"],
-        )
+        connector = get_connector_from_project(project)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
@@ -161,14 +310,7 @@ async def sync_project_schema(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     try:
-        connector = get_connector(
-            project["engine"],
-            project["db_host"],
-            project["db_port"],
-            project["db_name"],
-            project["db_username"],
-            project["db_password"],
-        )
+        connector = get_connector_from_project(project)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 

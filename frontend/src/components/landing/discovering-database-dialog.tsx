@@ -24,12 +24,14 @@ const STEP_INTERVAL_MS = 900
 type DiscoveringDatabaseDialogProps = {
   open: boolean
   isComplete: boolean
+  title?: string
   onOpenChange?: (open: boolean) => void
 }
 
 export function DiscoveringDatabaseDialog({
   open,
   isComplete,
+  title = 'Discovering database…',
   onOpenChange,
 }: DiscoveringDatabaseDialogProps) {
   const [completedCount, setCompletedCount] = useState(0)
@@ -66,7 +68,7 @@ export function DiscoveringDatabaseDialog({
       >
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold text-brand-navy">
-            Discovering database…
+            {title}
           </DialogTitle>
         </DialogHeader>
 

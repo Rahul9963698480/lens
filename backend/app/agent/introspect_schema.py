@@ -214,21 +214,33 @@ def create_introspect_schema_tool(project_id: UUID | str, pool: asyncpg.Pool):
                 else []
             )
 
+            table: dict[str, Any] = {
+                "table_name": row["table_name"],
+                "business_name": row.get("business_name"),
+                "db_name": row.get("db_name"),
+                "table_description": row.get("table_description"),
+                "inferred": row.get("inferred"),
+                "updated_at": row.get("updated_at"),
+                "columns": columns,
+                "relationships": relationships,
+            }
+            if any(r.get("confidence") == "inferred_from_data" for r in relationships):
+                table["note"] = (
+                    "Some relationships were inferred from overlapping column values "
+                    "(confidence=inferred_from_data), not declared foreign keys."
+                )
+            elif include_relationships and not relationships:
+                table["note"] = (
+                    "No relationships are declared for this table. "
+                    "Do not join it to another table."
+                )
+
             return _json_response(
                 {
                     "status": "ok",
                     "project_id": row.get("project_id"),
                     "source": CATALOG_TABLE,
-                    "table": {
-                        "table_name": row["table_name"],
-                        "business_name": row.get("business_name"),
-                        "db_name": row.get("db_name"),
-                        "table_description": row.get("table_description"),
-                        "inferred": row.get("inferred"),
-                        "updated_at": row.get("updated_at"),
-                        "columns": columns,
-                        "relationships": relationships,
-                    },
+                    "table": table,
                 }
             )
 
