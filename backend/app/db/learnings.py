@@ -8,7 +8,7 @@ import asyncpg
 
 _ATTEMPT_COLS = """
     id, project_id, question, generated_sql, executed_sql,
-    execution_status, result_row_count, feedback, created_at
+    execution_status, result_row_count, feedback, created_at, analysis_id
 """
 
 _LEARNING_COLS = """
@@ -43,18 +43,37 @@ async def insert_query_attempt(
     project_id: UUID,
     question: str,
     generated_sql: str,
+    analysis_id: UUID | None = None,
 ) -> asyncpg.Record:
     return await pool.fetchrow(
         f"""
         INSERT INTO query_attempts (
-            project_id, question, generated_sql, feedback, execution_status
+            project_id, question, generated_sql, feedback, execution_status, analysis_id
         )
-        VALUES ($1, $2, $3, 'unknown', 'not_run')
+        VALUES ($1, $2, $3, 'unknown', 'not_run', $4)
         RETURNING {_ATTEMPT_COLS}
         """,
         project_id,
         question,
         generated_sql,
+        analysis_id,
+    )
+
+
+async def list_attempts_for_analysis(
+    pool: asyncpg.Pool,
+    project_id: UUID,
+    analysis_id: UUID,
+) -> list[asyncpg.Record]:
+    return await pool.fetch(
+        f"""
+        SELECT {_ATTEMPT_COLS}
+        FROM query_attempts
+        WHERE project_id = $1 AND analysis_id = $2
+        ORDER BY created_at ASC
+        """,
+        project_id,
+        analysis_id,
     )
 
 

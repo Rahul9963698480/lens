@@ -47,6 +47,7 @@ class QueryAttemptResponse(BaseModel):
     result_row_count: int | None = None
     feedback: str
     created_at: datetime
+    analysis_id: UUID | None = None
 
 
 class AttemptConfirmRequest(BaseModel):

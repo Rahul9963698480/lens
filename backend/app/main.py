@@ -6,7 +6,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import projects, sql_routes
+from app.api import analysis_routes, projects, sql_routes
 from app.config import settings
 from app.db import app_db
 
@@ -51,6 +51,7 @@ app.add_middleware(
 # TODO: add auth back
 app.include_router(projects.router)
 app.include_router(sql_routes.router)
+app.include_router(analysis_routes.router)
 
 
 @app.get("/health")

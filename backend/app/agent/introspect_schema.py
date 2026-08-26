@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 import asyncpg
 from agno.tools import tool
 from agno.utils.log import logger
+
+app_logger = logging.getLogger(__name__)
 
 CATALOG_TABLE = "table_schema_catalog"
 MAX_TABLES_IN_LIST = 200
@@ -106,8 +110,16 @@ def create_introspect_schema_tool(project_id: UUID | str, pool: asyncpg.Pool):
         """
         requested = (table_name or "all").strip()
         list_all = requested.lower() in {"all", "*", "none", ""}
+        stamp = datetime.now(timezone.utc).isoformat()
         logger.info(
-            f"introspect_schema called: project_id={_project_id} table_name={requested!r}"
+            f"introspect_schema called: project_id={_project_id} "
+            f"table_name={requested!r} timestamp={stamp}"
+        )
+        app_logger.info(
+            "introspect_schema called project_id=%s table_name=%s timestamp=%s",
+            _project_id,
+            requested,
+            stamp,
         )
 
         if not list_all and not _SAFE_TABLE_NAME.match(requested):
