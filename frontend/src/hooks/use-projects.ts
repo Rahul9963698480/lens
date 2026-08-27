@@ -12,8 +12,10 @@ import type {
   TableAnnotationPayload,
   TableSchema,
 } from '@/types/project'
-import type { SqlExecuteResponse, SqlGenerateResponse } from '@/types/sql'
-
+import type {
+  AnalysisRunResponse,
+  AnalysisStartResponse,
+} from '@/types/analysis'
 export const projectKeys = {
   all: ['projects'] as const,
   schema: (projectId: string) =>
@@ -106,28 +108,26 @@ export function useUpdateTableAnnotations(projectId: string | undefined) {
   )
 }
 
-type GenerateSqlVariables = {
+type StartAnalysisVariables = {
   projectId: string
   question: string
 }
 
-export function useGenerateSql() {
-  return useApiMutation<GenerateSqlVariables, SqlGenerateResponse>(
-    ({ projectId, question }) => projectsApi.generateSql(projectId, { question }),
+export function useStartAnalysis() {
+  return useApiMutation<StartAnalysisVariables, AnalysisStartResponse>(
+    ({ projectId, question }) => projectsApi.startAnalysis(projectId, { question }),
     { successMessage: false },
   )
 }
 
-type ExecuteSqlVariables = {
+type RunAnalysisVariables = {
   projectId: string
-  sql: string
-  attemptId: string
+  analysisId: string
 }
 
-export function useExecuteSql() {
-  return useApiMutation<ExecuteSqlVariables, SqlExecuteResponse>(
-    ({ projectId, sql, attemptId }) =>
-      projectsApi.executeSql(projectId, { sql, attempt_id: attemptId }),
+export function useRunAnalysis() {
+  return useApiMutation<RunAnalysisVariables, AnalysisRunResponse>(
+    ({ projectId, analysisId }) => projectsApi.runAnalysis(projectId, analysisId),
     { successMessage: false },
   )
 }

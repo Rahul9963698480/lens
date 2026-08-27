@@ -1,8 +1,9 @@
 import { ArrowRight, Mic, Plus, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { AnalysisConfirmDialog } from '@/components/playground/analysis-confirm-dialog'
+import { AnalysisResultCard } from '@/components/playground/analysis-result-card'
 import { FeedbackRuleDialog } from '@/components/playground/feedback-rule-dialog'
-import { SqlQueryCard } from '@/components/playground/sql-query-card'
 import {
   Attachment,
   AttachmentAction,
@@ -15,11 +16,11 @@ import { BrandSpinner } from '@/components/ui/brand-loader'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
 import { Message, MessageContent, MessageGroup } from '@/components/ui/message'
-import { useExecuteSql, useGenerateSql, useSubmitFeedback } from '@/hooks/use-projects'
+import { useRunAnalysis, useStartAnalysis, useSubmitFeedback } from '@/hooks/use-projects'
 import { apiErrorMessage } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { cn } from '@/lib/utils'
-import type { SqlExecuteResponse } from '@/types/sql'
+import type { AnalysisRunResponse } from '@/types/analysis'
 
 const MAX_FILES = 10
 
@@ -34,11 +35,9 @@ type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   attachments: ChatAttachment[]
-  sql?: string
-  attemptId?: string
   generating?: boolean
-  executing?: boolean
-  result?: SqlExecuteResponse
+  running?: boolean
+  analysisResult?: AnalysisRunResponse
   error?: string
 }
 
@@ -192,14 +191,21 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
   const [files, setFiles] = useState<ChatAttachment[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [listening, setListening] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    messageId: string
+    analysisId: string
+    proposedSql: string
+    message: string
+  } | null>(null)
   const [feedbackDialog, setFeedbackDialog] = useState<{
     open: boolean
     sql: string
     attemptId: string
     feedback: 'correct' | 'incorrect'
   } | null>(null)
-  const generateSql = useGenerateSql()
-  const executeSql = useExecuteSql()
+  const startAnalysis = useStartAnalysis()
+  const runAnalysis = useRunAnalysis()
   const submitFeedback = useSubmitFeedback()
 
   useEffect(() => {
@@ -331,67 +337,93 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
     }
 
     try {
-      const response = await generateSql.mutateAsync({
+      const response = await startAnalysis.mutateAsync({
         projectId,
         question: content,
       })
       updateMessage(assistantMessage.id, {
-        sql: response.sql,
-        attemptId: response.attempt_id,
         generating: false,
         error: undefined,
+      })
+      setConfirmDialog({
+        open: true,
+        messageId: assistantMessage.id,
+        analysisId: response.analysis_id,
+        proposedSql: response.proposed_sql,
+        message: response.message,
       })
     } catch (error) {
       updateMessage(assistantMessage.id, {
         generating: false,
-        error: errorMessage(error, 'Failed to generate SQL.'),
+        error: errorMessage(error, 'Failed to start analysis.'),
       })
     }
   }
 
-  const handleExecute = async (messageId: string, sql: string) => {
-    if (!projectId) {
-      notify.error('Project is missing.')
+  const handleConfirmAnalysis = async () => {
+    if (!projectId || !confirmDialog) {
       return
     }
 
-    const message = messages.find((m) => m.id === messageId)
-    // if (!message?.attemptId) {
-    //   notify.error('No attempt ID found for this query.')
-    //   return
-    // }
-
-    const query = sql.trim()
-    if (!query) {
-      return
-    }
+    const { messageId, analysisId } = confirmDialog
 
     updateMessage(messageId, {
-      executing: true,
-      result: undefined,
+      running: true,
       error: undefined,
+      analysisResult: undefined,
     })
 
     try {
-      const result = await executeSql.mutateAsync({
+      const result = await runAnalysis.mutateAsync({
         projectId,
-        sql: query,
-        attemptId: message.attemptId,
+        analysisId,
       })
       updateMessage(messageId, {
-        executing: false,
-        result,
+        running: false,
+        analysisResult: result,
       })
+      setConfirmDialog(null)
     } catch (error) {
       updateMessage(messageId, {
-        executing: false,
-        error: errorMessage(error, 'Failed to execute SQL.'),
+        running: false,
+        error: errorMessage(error, 'Failed to run analysis.'),
+      })
+      setConfirmDialog(null)
+    }
+  }
+
+  const handleCancelAnalysis = () => {
+    if (confirmDialog) {
+      updateMessage(confirmDialog.messageId, {
+        content: 'Analysis cancelled.',
       })
     }
+    setConfirmDialog(null)
+  }
+
+  const handleSqlChange = (messageId: string, attemptId: string, sql: string) => {
+    setMessages((current) =>
+      current.map((message) => {
+        if (message.id !== messageId || !message.analysisResult) {
+          return message
+        }
+
+        return {
+          ...message,
+          analysisResult: {
+            ...message.analysisResult,
+            queries_used: message.analysisResult.queries_used.map((query) =>
+              query.attempt_id === attemptId ? { ...query, sql } : query,
+            ),
+          },
+        }
+      }),
+    )
   }
 
   const handleFeedback = async (
     messageId: string,
+    attemptId: string,
     feedback: 'correct' | 'incorrect',
   ) => {
     if (!projectId) {
@@ -400,21 +432,20 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
     }
 
     const message = messages.find((m) => m.id === messageId)
-    if (!message?.attemptId) {
-      notify.error('No attempt ID found for this query.')
-      return
-    }
+    const sql =
+      message?.analysisResult?.queries_used.find((query) => query.attempt_id === attemptId)
+        ?.sql ?? ''
 
     try {
       await submitFeedback.mutateAsync({
         projectId,
-        attemptId: message.attemptId,
+        attemptId,
         feedback,
       })
       setFeedbackDialog({
         open: true,
-        sql: message.sql ?? '',
-        attemptId: message.attemptId,
+        sql,
+        attemptId,
         feedback,
       })
     } catch (error) {
@@ -488,24 +519,30 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
                     ) : null}
                     {message.generating ? (
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <BrandSpinner size={18} label="Generating SQL" />
-                        Generating SQL…
+                        <BrandSpinner size={18} label="Starting analysis" />
+                        Starting analysis…
                       </div>
                     ) : null}
-                    {message.error && !message.sql ? (
+                    {message.running ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <BrandSpinner size={18} label="Running analysis" />
+                        Running analysis…
+                      </div>
+                    ) : null}
+                    {message.error && !message.analysisResult ? (
                       <Bubble variant="destructive">
                         <BubbleContent>{message.error}</BubbleContent>
                       </Bubble>
                     ) : null}
-                    {message.sql ? (
-                      <SqlQueryCard
-                        sql={message.sql}
-                        executing={message.executing}
-                        result={message.result}
-                        executeError={message.error}
-                        onSqlChange={(sql) => updateMessage(message.id, { sql })}
-                        onExecute={() => handleExecute(message.id, message.sql ?? '')}
-                        onFeedback={(fb) => handleFeedback(message.id, fb)}
+                    {message.analysisResult ? (
+                      <AnalysisResultCard
+                        result={message.analysisResult}
+                        onSqlChange={(attemptId, sql) =>
+                          handleSqlChange(message.id, attemptId, sql)
+                        }
+                        onFeedback={(attemptId, feedback) =>
+                          handleFeedback(message.id, attemptId, feedback)
+                        }
                       />
                     ) : null}
                   </MessageContent>
@@ -529,6 +566,17 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
           </div>
         </>
       )}
+
+      {confirmDialog ? (
+        <AnalysisConfirmDialog
+          open={confirmDialog.open}
+          proposedSql={confirmDialog.proposedSql}
+          message={confirmDialog.message}
+          confirming={runAnalysis.isPending}
+          onConfirm={handleConfirmAnalysis}
+          onClose={handleCancelAnalysis}
+        />
+      ) : null}
 
       {feedbackDialog && projectId ? (
         <FeedbackRuleDialog
