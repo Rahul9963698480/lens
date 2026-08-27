@@ -1,18 +1,13 @@
-import { Check, Pencil, Play, X } from 'lucide-react'
-import { useState } from 'react'
+import { BarChart3, Check, Pencil, Play, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 
+import {
+  QueryResultRenderer,
+  type QueryResultViewMode,
+} from '@/components/query-result'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { formatCellValue } from '@/lib/table-column-utils'
 import { cn } from '@/lib/utils'
 import type { SqlExecuteResponse } from '@/types/sql'
 
@@ -39,7 +34,13 @@ export function SqlQueryCard({
 }: SqlQueryCardProps) {
   const [feedback, setFeedback] = useState<SqlFeedback>(null)
   const [isEditing, setIsEditing] = useState(false)
+  const [viewMode, setViewMode] = useState<QueryResultViewMode>('table')
   const canExecute = sql.trim().length > 0 && !executing
+  const canVisualize = Boolean(result) && !executing && !executeError
+
+  useEffect(() => {
+    setViewMode('table')
+  }, [result, executeError])
 
   const handleFeedback = (value: 'correct' | 'incorrect') => {
     setFeedback(value)
@@ -104,6 +105,26 @@ export function SqlQueryCard({
             {executing ? <Spinner /> : <Play className="size-3.5" fill="currentColor" />}
             Execute
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!canVisualize}
+            aria-pressed={viewMode === 'visualization'}
+            className={cn(
+              'border-brand-teal/40 text-brand-teal hover:bg-brand-teal/10 hover:text-brand-teal',
+              viewMode === 'visualization' &&
+                'border-brand-teal bg-brand-teal/10',
+            )}
+            onClick={() =>
+              setViewMode((current) =>
+                current === 'visualization' ? 'table' : 'visualization',
+              )
+            }
+          >
+            <BarChart3 className="size-3.5" />
+            Visualization
+          </Button>
         </div>
       </div>
 
@@ -119,64 +140,15 @@ export function SqlQueryCard({
         )}
       />
 
-      {executeError ? (
-        <p className="mt-3 text-sm text-destructive">{executeError}</p>
+      {executing || executeError || result ? (
+        <QueryResultRenderer
+          className="mt-3"
+          data={result}
+          loading={executing}
+          error={executeError}
+          viewMode={viewMode}
+        />
       ) : null}
-
-      {result ? <SqlResultTable result={result} /> : null}
-    </div>
-  )
-}
-
-function SqlResultTable({ result }: { result: SqlExecuteResponse }) {
-  const { columns, rows, row_count: rowCount } = result
-
-  if (columns.length === 0 && rows.length === 0) {
-    return (
-      <p className="mt-3 text-sm text-muted-foreground">
-        Query ran successfully. {rowCount} {rowCount === 1 ? 'row' : 'rows'} returned.
-      </p>
-    )
-  }
-
-  return (
-    <div className="mt-3 overflow-hidden rounded-lg border bg-background">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            {columns.map((column) => (
-              <TableHead key={column} className="h-auto px-3 py-2 text-xs">
-                {column}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.length === 0 ? (
-            <TableRow>
-              <TableCell
-                colSpan={Math.max(columns.length, 1)}
-                className="py-6 text-center text-muted-foreground"
-              >
-                No rows returned.
-              </TableCell>
-            </TableRow>
-          ) : (
-            rows.map((row, rowIndex) => (
-              <TableRow key={rowIndex}>
-                {columns.map((column) => (
-                  <TableCell key={column} className="px-3 py-2 text-sm">
-                    {formatCellValue(row[column])}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
-          )}
-        </TableBody>
-      </Table>
-      <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-        {rowCount} {rowCount === 1 ? 'row' : 'rows'}
-      </p>
     </div>
   )
 }

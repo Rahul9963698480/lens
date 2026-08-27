@@ -9,12 +9,10 @@ import type {
   TableSchema,
 } from '@/types/project'
 import type {
-  SqlExecuteRequest,
-  SqlExecuteResponse,
-  SqlGenerateRequest,
-  SqlGenerateResponse,
-} from '@/types/sql'
-
+  AnalysisRunResponse,
+  AnalysisStartRequest,
+  AnalysisStartResponse,
+} from '@/types/analysis'
 import axiosInstance from './axios-instance'
 
 const projectsApi = {
@@ -52,15 +50,14 @@ const projectsApi = {
       `/projects/${projectId}/schema/${tableName}/columns/${columnName}`,
       payload,
     ),
-  generateSql: (projectId: string, payload: SqlGenerateRequest) =>
-    axiosInstance.post<SqlGenerateResponse>(
-      `/projects/${projectId}/sql/generate`,
+  startAnalysis: (projectId: string, payload: AnalysisStartRequest) =>
+    axiosInstance.post<AnalysisStartResponse>(
+      `/projects/${projectId}/analysis/start`,
       payload,
     ),
-  executeSql: (projectId: string, payload: SqlExecuteRequest) =>
-    axiosInstance.post<SqlExecuteResponse>(
-      `/projects/${projectId}/sql/execute`,
-      payload,
+  runAnalysis: (projectId: string, analysisId: string) =>
+    axiosInstance.post<AnalysisRunResponse>(
+      `/projects/${projectId}/analysis/${analysisId}/run`,
     ),
   submitFeedback: (
     projectId: string,
