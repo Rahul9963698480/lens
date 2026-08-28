@@ -17,8 +17,6 @@ import {
 
 import {
   ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
@@ -238,6 +236,28 @@ function buildPieConfig(chartData: ChartRow[]): ChartConfig {
   )
 }
 
+function ChartSeriesLegend({ series }: { series: SeriesDef[] }) {
+  if (series.length <= 1) return null
+
+  return (
+    <div className="mt-2 flex w-full min-w-0 flex-wrap items-center justify-center gap-x-3 gap-y-2 px-1">
+      {series.map((item) => (
+        <div
+          key={item.key}
+          className="flex min-w-0 max-w-full items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          <span
+            className="size-2.5 shrink-0 rounded-full"
+            style={{ backgroundColor: item.color }}
+            aria-hidden
+          />
+          <span className="truncate">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function formatXTick(value: unknown, preferTemporal: boolean): string {
   if (preferTemporal && typeof value === 'number') {
     const date = new Date(value)
@@ -258,6 +278,21 @@ export function QueryResultChart({
   type,
   className,
 }: QueryResultChartProps) {
+  const chartRecommendation = useMemo(() => {
+    if (type !== 'pie') return recommendation
+
+    const valueColumns = recommendation.valueColumns.slice(0, 1)
+    if (recommendation.colorColumn) {
+      return {
+        ...recommendation,
+        labelColumn: recommendation.colorColumn,
+        valueColumns,
+      }
+    }
+
+    return { ...recommendation, valueColumns }
+  }, [type, recommendation])
+
   const preferTemporalX = useMemo(() => {
     if (!recommendation.labelColumn) return false
     return data.rows.some((row) =>
@@ -265,25 +300,31 @@ export function QueryResultChart({
     )
   }, [data.rows, recommendation.labelColumn])
 
-  const colorMode = Boolean(recommendation.colorColumn) && type !== 'pie'
+  const colorMode =
+    Boolean(recommendation.colorColumn) && type !== 'pie'
 
   const series = useMemo(() => {
     if (colorMode && recommendation.colorColumn) {
       return buildColorSeries(data, recommendation.colorColumn)
     }
-    return buildMeasureSeries(recommendation.valueColumns)
-  }, [colorMode, data, recommendation.colorColumn, recommendation.valueColumns])
+    return buildMeasureSeries(chartRecommendation.valueColumns)
+  }, [
+    colorMode,
+    data,
+    recommendation.colorColumn,
+    chartRecommendation.valueColumns,
+  ])
 
   const chartData = useMemo(() => {
     if (type === 'scatter') return []
     return toCartesianRows(
       data,
-      recommendation,
+      chartRecommendation,
       series,
       colorMode ? 'color' : 'measure',
       preferTemporalX,
     )
-  }, [data, recommendation, series, colorMode, preferTemporalX, type])
+  }, [data, chartRecommendation, series, colorMode, preferTemporalX, type])
 
   const scatterGroups = useMemo(() => {
     if (type !== 'scatter') return new Map()
@@ -314,6 +355,18 @@ export function QueryResultChart({
     return buildConfig(series)
   }, [type, chartData, scatterSeries, series])
 
+  const legendSeries = useMemo((): SeriesDef[] => {
+    if (type === 'scatter') return scatterSeries
+    if (type === 'pie') {
+      return chartData.map((row, index) => ({
+        key: String(row.__legendKey),
+        label: String(row.__labelDisplay),
+        color: CHART_COLORS[index % CHART_COLORS.length],
+      }))
+    }
+    return series
+  }, [type, scatterSeries, chartData, series])
+
   const hasScatter =
     type === 'scatter' &&
     [...scatterGroups.values()].some((points) => points.length > 0)
@@ -328,16 +381,24 @@ export function QueryResultChart({
   }
 
   const primaryKey = series[0]?.key
+
   const encodingHint = [
-    recommendation.labelColumn && `x: ${recommendation.labelColumn}`,
-    recommendation.valueColumns[0] && `y: ${recommendation.valueColumns[0]}`,
-    recommendation.colorColumn && `color: ${recommendation.colorColumn}`,
+    type === 'pie' && chartRecommendation.labelColumn
+      ? `slice: ${chartRecommendation.labelColumn}`
+      : recommendation.labelColumn && `x: ${recommendation.labelColumn}`,
+    chartRecommendation.valueColumns[0] &&
+      (type === 'pie'
+        ? `value: ${chartRecommendation.valueColumns[0]}`
+        : `y: ${chartRecommendation.valueColumns[0]}`),
+    type !== 'pie' &&
+      recommendation.colorColumn &&
+      `color: ${recommendation.colorColumn}`,
   ]
     .filter(Boolean)
     .join(' · ')
 
   return (
-    <div className={cn('rounded-lg border bg-background p-3', className)}>
+    <div className={cn('min-w-0 overflow-hidden rounded-lg border bg-background p-3', className)}>
       <ChartContainer
         config={config}
         className="aspect-[16/9] max-h-72 w-full min-h-52"
@@ -372,7 +433,6 @@ export function QueryResultChart({
                 />
               }
             />
-            {series.length > 1 ? <ChartLegend content={<ChartLegendContent />} /> : null}
             {series.map((item) => (
               <Bar
                 key={item.key}
@@ -414,7 +474,6 @@ export function QueryResultChart({
                 />
               }
             />
-            {series.length > 1 ? <ChartLegend content={<ChartLegendContent />} /> : null}
             {series.map((item) => (
               <Line
                 key={item.key}
@@ -515,29 +574,12 @@ export function QueryResultChart({
                 />
               ))}
             </Pie>
-            <ChartLegend content={<ChartLegendContent nameKey="__legendKey" />} />
           </PieChart>
         ) : null}
       </ChartContainer>
-      {type === 'scatter' && scatterSeries.length > 1 ? (
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
-          {scatterSeries.map((item) => (
-            <div
-              key={item.key}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground"
-            >
-              <span
-                className="size-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: item.color }}
-                aria-hidden
-              />
-              <span className="truncate max-w-28">{item.label}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <ChartSeriesLegend series={legendSeries} />
       {encodingHint ? (
-        <p className="mt-2 truncate text-center text-xs text-muted-foreground">
+        <p className="mt-2 text-center text-xs break-words text-muted-foreground">
           {encodingHint}
         </p>
       ) : null}

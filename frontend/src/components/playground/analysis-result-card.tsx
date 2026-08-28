@@ -1,7 +1,7 @@
-import { BarChart3, ChartScatter, Check, LineChart, Pencil, PieChart, X } from 'lucide-react'
+import { Check, Pencil, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
-import { QueryResultChart } from '@/components/query-result/query-result-charts'
+import { QueryResultChartSection } from '@/components/query-result/query-result-chart-section'
 import { QueryResultKpi } from '@/components/query-result/query-result-kpi'
 import { QueryResultTable } from '@/components/query-result/query-result-table'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -9,10 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { inferVisualization } from '@/lib/query-result/infer-visualization'
-import type {
-  ChartVisualizationType,
-  QueryResultData,
-} from '@/lib/query-result/types'
+import type { QueryResultData } from '@/lib/query-result/types'
 import { cn } from '@/lib/utils'
 import type { AnalysisQueryUsed, AnalysisRunResponse } from '@/types/analysis'
 
@@ -23,16 +20,6 @@ type AnalysisResultCardProps = {
   className?: string
   onSqlChange?: (attemptId: string, sql: string) => void
   onFeedback?: (attemptId: string, feedback: 'correct' | 'incorrect') => void
-}
-
-const CHART_TYPE_META: Record<
-  ChartVisualizationType,
-  { label: string; icon: typeof BarChart3 }
-> = {
-  bar: { label: 'Bar chart', icon: BarChart3 },
-  line: { label: 'Line chart', icon: LineChart },
-  pie: { label: 'Pie chart', icon: PieChart },
-  scatter: { label: 'Scatter chart', icon: ChartScatter },
 }
 
 function toQueryResultData(
@@ -239,23 +226,10 @@ export function AnalysisResultCard({
               ) : null}
 
               {recommendation.availableChartTypes.length > 0 ? (
-                recommendation.availableChartTypes.map((type) => {
-                  const meta = CHART_TYPE_META[type]
-                  const Icon = meta.icon
-                  return (
-                    <section key={type} className="flex flex-col gap-1.5">
-                      <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                        <Icon className="size-3.5" />
-                        {meta.label}
-                      </p>
-                      <QueryResultChart
-                        data={tableData}
-                        recommendation={recommendation}
-                        type={type}
-                      />
-                    </section>
-                  )
-                })
+                <QueryResultChartSection
+                  data={tableData}
+                  recommendation={recommendation}
+                />
               ) : (
                 <p className="text-sm text-muted-foreground">
                   No chart visualizations are available for this result.

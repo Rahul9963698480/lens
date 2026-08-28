@@ -12,7 +12,7 @@ import type {
 } from '@/lib/query-result/types'
 
 const MAX_CHART_CATEGORIES = 24
-const MAX_PIE_CATEGORIES = 8
+const MAX_PIE_CATEGORIES = 12
 const MAX_COLOR_CATEGORIES = 12
 const SAMPLE_LIMIT = 100
 
@@ -150,6 +150,24 @@ function allNonNegative(rows: Record<string, unknown>[], column: string): boolea
   return true
 }
 
+function canShowPieChart(
+  data: QueryResultData,
+  profiles: ColumnProfile[],
+  labelColumnName: string,
+  valueColumnName: string,
+  rowCount: number,
+): boolean {
+  const labelProfile = profiles.find((profile) => profile.name === labelColumnName)
+  const distinct = labelProfile?.uniqueCount ?? rowCount
+
+  return (
+    distinct >= 2 &&
+    distinct <= MAX_PIE_CATEGORIES &&
+    distinct === rowCount &&
+    allNonNegative(data.rows, valueColumnName)
+  )
+}
+
 function uniqueTypes(types: ChartVisualizationType[]): ChartVisualizationType[] {
   return [...new Set(types)]
 }
@@ -223,6 +241,12 @@ export function inferVisualization(data: QueryResultData): VisualizationRecommen
       'bar',
       ...(colorColumn ? (['line'] as ChartVisualizationType[]) : []),
     ])
+    const pieLabelColumn = colorColumn?.name ?? xColumn.name
+    if (
+      canShowPieChart(data, profiles, pieLabelColumn, yColumn.name, rowCount)
+    ) {
+      available.push('pie')
+    }
 
     return {
       type: 'scatter',
@@ -272,12 +296,13 @@ export function inferVisualization(data: QueryResultData): VisualizationRecommen
   if (categoryColumn && numericColumns.length > 0 && rowCount >= 2) {
     const valueColumn = numericColumns[0]
     const distinct = categoryColumn.uniqueCount
-    const fitsPie =
-      numericColumns.length === 1 &&
-      distinct >= 2 &&
-      distinct <= MAX_PIE_CATEGORIES &&
-      distinct === rowCount &&
-      allNonNegative(data.rows, valueColumn.name)
+    const fitsPie = canShowPieChart(
+      data,
+      profiles,
+      categoryColumn.name,
+      valueColumn.name,
+      rowCount,
+    )
 
     const colorColumn = pickColorColumn(
       profiles,
