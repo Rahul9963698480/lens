@@ -1,14 +1,7 @@
-import {
-  AlertCircle,
-  BarChart3,
-  ChartScatter,
-  Inbox,
-  LineChart,
-  PieChart,
-} from 'lucide-react'
+import { AlertCircle, Inbox } from 'lucide-react'
 import { useMemo } from 'react'
 
-import { QueryResultChart } from '@/components/query-result/query-result-charts'
+import { QueryResultChartSection } from '@/components/query-result/query-result-chart-section'
 import { QueryResultKpi } from '@/components/query-result/query-result-kpi'
 import { QueryResultTable } from '@/components/query-result/query-result-table'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -22,10 +15,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { inferVisualization } from '@/lib/query-result/infer-visualization'
-import type {
-  ChartVisualizationType,
-  QueryResultData,
-} from '@/lib/query-result/types'
+import type { QueryResultData } from '@/lib/query-result/types'
 import { cn } from '@/lib/utils'
 
 export type QueryResultViewMode = 'table' | 'visualization'
@@ -37,16 +27,6 @@ type QueryResultRendererProps = {
   className?: string
   /** Controlled by the Visualization button beside Execute. */
   viewMode?: QueryResultViewMode
-}
-
-const CHART_TYPE_META: Record<
-  ChartVisualizationType,
-  { label: string; icon: typeof BarChart3 }
-> = {
-  bar: { label: 'Bar chart', icon: BarChart3 },
-  line: { label: 'Line chart', icon: LineChart },
-  pie: { label: 'Pie chart', icon: PieChart },
-  scatter: { label: 'Scatter chart', icon: ChartScatter },
 }
 
 function QueryResultLoading({ className }: { className?: string }) {
@@ -106,7 +86,7 @@ function QueryResultError({
 
 /**
  * Renders tabular query results. Table is the default; visualization mode
- * shows every available chart for the result set.
+ * shows one chart at a time with a chart-type dropdown.
  */
 export function QueryResultRenderer({
   data,
@@ -170,23 +150,12 @@ export function QueryResultRenderer({
               </section>
             ) : null}
 
-            {availableTypes.map((type) => {
-              const meta = CHART_TYPE_META[type]
-              const Icon = meta.icon
-              return (
-                <section key={type} className="flex flex-col gap-1.5">
-                  <p className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                    <Icon className="size-3.5" />
-                    {meta.label}
-                  </p>
-                  <QueryResultChart
-                    data={data}
-                    recommendation={recommendation}
-                    type={type}
-                  />
-                </section>
-              )
-            })}
+            {showCharts ? (
+              <QueryResultChartSection
+                data={data}
+                recommendation={recommendation}
+              />
+            ) : null}
 
             <div className="flex flex-col gap-1.5">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
