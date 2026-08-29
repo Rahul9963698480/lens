@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     MODEL_ID: str = "gpt-4o"
     RELATIONSHIP_VERIFY_MODEL_ID: str = "gpt-4o-mini"
+    XLSX_INGEST_CHUNK_SIZE: int = 3000 #Sets the number of rows to process at a time when importing an Excel sheet into the DuckDB database.
+    DUCKDB_MEMORY_LIMIT: str = "1GB" #Sets a maximum RAM threshold that DuckDB is allowed to consume when running queries or importing Excel sheets.
+    DUCKDB_THREADS: int = 4 # Sets the maximum number of CPU worker threads DuckDB can use to execute queries in parallel.
 
     @property
     def asyncpg_dsn(self) -> str:

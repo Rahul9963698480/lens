@@ -1,23 +1,27 @@
-"""Convert an uploaded XLSX workbook into a local SQLite database."""
+"""Convert an uploaded XLSX workbook into a local DuckDB database."""
 
 from __future__ import annotations
 
 import math
 import re
-import sqlite3
 from datetime import date, datetime
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
+from app.config import settings
 
 _NON_ALNUM = re.compile(r"[^a-z0-9_]+")
 _MULTI_UNDERSCORE = re.compile(r"_+")
 
 
 class XlsxIngestError(ValueError):
-    """Workbook could not be parsed into SQLite tables."""
+    """Workbook could not be parsed into DuckDB tables."""
 
 
 def sanitize_identifier(name: str, *, fallback: str = "col") -> str:
@@ -81,25 +85,25 @@ def _is_date_like(value: Any) -> bool:
     return isinstance(value, (datetime, date, pd.Timestamp))
 
 
-def infer_sqlite_type(series: pd.Series) -> str:
+def infer_column_type(series: pd.Series) -> str:
     values = [v for v in series.tolist() if not _is_null(v)]
     if not values:
-        return "TEXT"
+        return "VARCHAR"
     if all(_is_integer_like(v) for v in values):
-        return "INTEGER"
+        return "BIGINT"
     if all(_is_numeric(v) for v in values):
-        return "REAL"
+        return "DOUBLE"
     if all(_is_date_like(v) for v in values):
-        return "TEXT"
-    return "TEXT"
+        return "VARCHAR"
+    return "VARCHAR"
 
 
-def _to_sqlite_value(value: Any, sqlite_type: str) -> Any:
+def _coerce_frame_value(value: Any, column_type: str) -> Any:
     if _is_null(value):
         return None
-    if sqlite_type == "INTEGER":
+    if column_type == "BIGINT":
         return int(value)
-    if sqlite_type == "REAL":
+    if column_type == "DOUBLE":
         return float(value)
     if _is_date_like(value):
         ts = pd.Timestamp(value)
@@ -111,91 +115,191 @@ def _to_sqlite_value(value: Any, sqlite_type: str) -> Any:
     return str(value)
 
 
-def _prepare_frame(df: pd.Series | pd.DataFrame, table_name: str) -> tuple[pd.DataFrame, list[str], list[str]]:
-    if isinstance(df, pd.Series):
-        df = df.to_frame()
-    df = df.dropna(axis=0, how="all")
-    df = df.dropna(axis=1, how="all")
-    if df.empty:
-        raise XlsxIngestError(f"Sheet {table_name!r} has no data rows.")
-
+def _sanitize_headers(raw_headers: tuple[Any, ...]) -> list[str]:
     used_cols: set[str] = set()
     columns: list[str] = []
-    for raw in df.columns:
+    for raw in raw_headers:
         base = sanitize_identifier(str(raw), fallback="col")
         columns.append(unique_identifier(base, used_cols))
-    df.columns = columns
-    types = [infer_sqlite_type(df[col]) for col in columns]
-    return df, columns, types
+    return columns
 
 
-def workbook_to_sqlite(xlsx_path: str | Path, sqlite_path: str | Path) -> list[str]:
-    """Parse an .xlsx file into SQLite tables. Returns created table names."""
+def _normalize_row(row: tuple[Any, ...], width: int) -> list[Any]:
+    values = list(row[:width])
+    if len(values) < width:
+        values.extend([None] * (width - len(values)))
+    return values
+
+
+def _infer_types(columns: list[str], rows: list[list[Any]]) -> list[str]:
+    df = pd.DataFrame(rows, columns=columns)
+    df = df.dropna(axis=0, how="all")
+    if df.empty:
+        raise XlsxIngestError("Sheet has no data rows.")
+    return [infer_column_type(df[col]) for col in columns]
+
+
+def _rows_to_frame(
+    rows: list[list[Any]], columns: list[str], types: list[str]
+) -> pd.DataFrame:
+    coerced = [
+        [_coerce_frame_value(value, col_type) for value, col_type in zip(row, types)]
+        for row in rows
+    ]
+    return pd.DataFrame(coerced, columns=columns)
+
+
+def _configure_connection(conn: duckdb.DuckDBPyConnection) -> None:
+    if settings.DUCKDB_MEMORY_LIMIT:
+        conn.execute(f"SET memory_limit = '{settings.DUCKDB_MEMORY_LIMIT}'")
+    if settings.DUCKDB_THREADS > 0:
+        conn.execute(f"SET threads = {int(settings.DUCKDB_THREADS)}")
+
+
+def _insert_frame_chunked(
+    conn: duckdb.DuckDBPyConnection,
+    table: str,
+    df: pd.DataFrame,
+    *,
+    chunk_size: int,
+) -> None:
+    if df.empty:
+        return
+    quoted_cols = ", ".join(_quote_ident(c) for c in df.columns)
+    for start in range(0, len(df), chunk_size):
+        chunk = df.iloc[start : start + chunk_size]
+        conn.register("_ingest_chunk", chunk)
+        try:
+            conn.execute(
+                f"INSERT INTO {_quote_ident(table)} ({quoted_cols}) "
+                f"SELECT {quoted_cols} FROM _ingest_chunk"
+            )
+        finally:
+            conn.unregister("_ingest_chunk")
+
+
+def _ingest_sheet_streaming(
+    ws: Worksheet,
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    sheet_name: str,
+    used_tables: set[str],
+    chunk_size: int,
+) -> str | None:
+    row_iter = ws.iter_rows(values_only=True)
+    header = next(row_iter, None)
+    if header is None or all(_is_null(value) for value in header):
+        return None
+
+    columns = _sanitize_headers(header)
+    if not columns:
+        return None
+
+    width = len(columns)
+    table = unique_identifier(
+        sanitize_identifier(str(sheet_name), fallback="sheet"),
+        used_tables,
+    )
+    types: list[str] | None = None
+    pending: list[list[Any]] = []
+
+    def _create_table(sample_rows: list[list[Any]]) -> None:
+        nonlocal types
+        types = _infer_types(columns, sample_rows)
+        col_defs = ", ".join(
+            f"{_quote_ident(col)} {col_type}" for col, col_type in zip(columns, types)
+        )
+        conn.execute(f"CREATE TABLE {_quote_ident(table)} ({col_defs})")
+
+    def _flush(rows: list[list[Any]]) -> None:
+        if not rows:
+            return
+        trimmed = [row[: len(columns)] for row in rows]
+        frame = _rows_to_frame(trimmed, columns, types or [])
+        _insert_frame_chunked(conn, table, frame, chunk_size=chunk_size)
+
+    for row in row_iter:
+        values = _normalize_row(row, width)
+        if all(_is_null(value) for value in values):
+            continue
+
+        if types is None:
+            pending.append(values)
+            if len(pending) >= chunk_size:
+                _create_table(pending)
+                _flush(pending)
+                pending = []
+            continue
+
+        pending.append(values)
+        if len(pending) >= chunk_size:
+            _flush(pending)
+            pending = []
+
+    if types is None:
+        if not pending:
+            return None
+        _create_table(pending)
+        _flush(pending)
+        return table
+
+    _flush(pending)
+    return table
+
+
+def workbook_to_duckdb(xlsx_path: str | Path, duckdb_path: str | Path) -> list[str]:
+    """Parse an .xlsx file into DuckDB tables. Returns created table names."""
     path = Path(xlsx_path)
     if path.suffix.lower() != ".xlsx":
         raise XlsxIngestError("Only .xlsx files are supported.")
 
+    duckdb_path = Path(duckdb_path)
+    duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+    if duckdb_path.exists():
+        duckdb_path.unlink()
+
+    used_tables: set[str] = set()
+    created: list[str] = []
+    chunk_size = settings.XLSX_INGEST_CHUNK_SIZE
+
     try:
-        sheets = pd.read_excel(path, sheet_name=None, engine="openpyxl")
+        workbook = load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:
         raise XlsxIngestError(
             f"Could not parse the spreadsheet (corrupt or unsupported format): {exc}"
         ) from exc
 
-    if not sheets:
-        raise XlsxIngestError("Workbook is empty — no sheets found.")
-
-    sqlite_path = Path(sqlite_path)
-    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    if sqlite_path.exists():
-        sqlite_path.unlink()
-
-    used_tables: set[str] = set()
-    created: list[str] = []
-
-    conn = sqlite3.connect(str(sqlite_path))
+    conn = duckdb.connect(str(duckdb_path))
+    _configure_connection(conn)
     try:
-        for sheet_name, frame in sheets.items():
-            if frame is None or frame.empty:
-                continue
+        if not workbook.sheetnames:
+            raise XlsxIngestError("Workbook is empty — no sheets found.")
+
+        for sheet_name in workbook.sheetnames:
             try:
-                df, columns, types = _prepare_frame(frame, str(sheet_name))
-            except XlsxIngestError:
+                ws = workbook[sheet_name]
+                table = _ingest_sheet_streaming(
+                    ws,
+                    conn,
+                    sheet_name=str(sheet_name),
+                    used_tables=used_tables,
+                    chunk_size=chunk_size,
+                )
+            except Exception:
                 continue
-
-            table = unique_identifier(
-                sanitize_identifier(str(sheet_name), fallback="sheet"),
-                used_tables,
-            )
-            col_defs = ", ".join(
-                f"{_quote_ident(col)} {col_type}" for col, col_type in zip(columns, types)
-            )
-            conn.execute(f"CREATE TABLE {_quote_ident(table)} ({col_defs})")
-
-            placeholders = ", ".join("?" for _ in columns)
-            quoted_cols = ", ".join(_quote_ident(c) for c in columns)
-            insert_sql = (
-                f"INSERT INTO {_quote_ident(table)} ({quoted_cols}) VALUES ({placeholders})"
-            )
-            rows = [
-                tuple(_to_sqlite_value(row[col], types[i]) for i, col in enumerate(columns))
-                for row in df.to_dict(orient="records")
-            ]
-            conn.executemany(insert_sql, rows)
-            created.append(table)
-
-        conn.commit()
+            if table:
+                created.append(table)
     except Exception:
-        conn.close()
-        if sqlite_path.exists():
-            sqlite_path.unlink()
+        if duckdb_path.exists():
+            duckdb_path.unlink()
         raise
-    else:
+    finally:
         conn.close()
+        workbook.close()
 
     if not created:
-        if sqlite_path.exists():
-            sqlite_path.unlink()
+        if duckdb_path.exists():
+            duckdb_path.unlink()
         raise XlsxIngestError("Workbook is empty — no sheets with data.")
 
     return created

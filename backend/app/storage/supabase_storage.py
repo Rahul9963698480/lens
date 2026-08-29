@@ -1,4 +1,4 @@
-"""Supabase Storage helpers for durable xlsx-project SQLite files."""
+"""Supabase Storage helpers for durable xlsx-project DuckDB files."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from supabase import Client, create_client
 
 from app.config import settings
 
-_SQLITE_CONTENT_TYPE = "application/x-sqlite3"
+_DUCKDB_CONTENT_TYPE = "application/octet-stream"
 
 
 class StorageConfigError(RuntimeError):
@@ -29,7 +29,7 @@ def parse_storage_path(storage_path: str) -> tuple[str, str]:
 
 def storage_object_path(project_id: str) -> str:
     """Return the canonical `file_path` stored on the projects row."""
-    return f"{settings.SUPABASE_STORAGE_BUCKET}/{project_id}.sqlite"
+    return f"{settings.SUPABASE_STORAGE_BUCKET}/{project_id}.duckdb"
 
 
 def _require_storage_settings() -> None:
@@ -44,13 +44,16 @@ def _client() -> Client:
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
 
 
-def _upload_sync(storage_path: str, local_path: str) -> None:
+def _upload_sync(storage_path: str, local_path: str, *, upsert: bool = False) -> None:
     bucket, key = parse_storage_path(storage_path)
     data = Path(local_path).read_bytes()
     _client().storage.from_(bucket).upload(
         key,
         data,
-        file_options={"content-type": _SQLITE_CONTENT_TYPE, "upsert": "false"},
+        file_options={
+            "content-type": _DUCKDB_CONTENT_TYPE,
+            "upsert": "true" if upsert else "false",
+        },
     )
 
 
@@ -67,8 +70,8 @@ def _delete_sync(storage_path: str) -> None:
     _client().storage.from_(bucket).remove([key])
 
 
-async def upload_file(storage_path: str, local_path: str) -> None:
-    await asyncio.to_thread(_upload_sync, storage_path, local_path)
+async def upload_file(storage_path: str, local_path: str, *, upsert: bool = False) -> None:
+    await asyncio.to_thread(_upload_sync, storage_path, local_path, upsert=upsert)
 
 
 async def download_file(storage_path: str, local_path: str) -> None:

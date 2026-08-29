@@ -11,22 +11,33 @@ from agno.models.openai import OpenAIChat
 
 from app.agent.introspect_schema import create_introspect_schema_tool
 from app.config import settings
+from app.db import app_db
 from app.db.learnings import get_relevant_learnings
 
 SQL_FENCE_RE = re.compile(r"```sql\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 GENERIC_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)```", re.DOTALL)
+
+DUCKDB_DIALECT_INSTRUCTIONS = [
+    "This spreadsheet project executes SQL on DuckDB (PostgreSQL-compatible dialect).",
+    "Use DuckDB-compatible read-only SQL: ILIKE, DATE_TRUNC, CAST(x AS VARCHAR), "
+    "standard JOINs, GROUP BY, window functions, and LIMIT.",
+    "Do not use SQLite-only functions (strftime, PRAGMA) or Postgres-only extensions "
+    "that DuckDB does not support.",
+]
 
 AGENT_INSTRUCTIONS = [
     "You are an expert SQL Query Generator agent.",
     "Step 1 — From the user's question, identify ALL tables required to answer it.",
     "Start by mapping question entities to candidate table names "
     "(e.g. 'customers' -> customer, 'stores' -> store).",
-    "Step 2 — Introspect ONLY the required tables.",
-    "Call `introspect_schema(table_name='<table_name>', include_relationships=true)` "
-    "for each initially identified table.",
-    "After introspecting an initial table, inspect its relationships to discover "
+    "Step 2 — Introspect ONLY the required tables in ONE tool call.",
+    "Call `introspect_schema(table_name='table1,table2', include_relationships=true)` "
+    "with every initially identified table in a comma-separated list. "
+    "Do not make a separate introspect_schema call per table.",
+    "After introspecting, inspect relationships to discover "
     "any additional required tables, including bridge or junction tables such as "
-    "`film_actor`, and introspect those tables before generating SQL.",
+    "`film_actor`, and introspect those missing tables in one more batched call "
+    "before generating SQL.",
     "If the question identifies a table but the required JOIN or bridge table is "
     "not yet known, first introspect the identified table and inspect its "
     "relationships. Use those relationships to discover additional required "
@@ -92,7 +103,15 @@ def extract_sql(content: str) -> str:
     return ""
 
 
-def _build_agent(project_id: UUID, pool: asyncpg.Pool) -> Agent:
+def _build_agent(
+    project_id: UUID,
+    pool: asyncpg.Pool,
+    *,
+    sql_dialect: str = "postgres",
+) -> Agent:
+    instructions = list(AGENT_INSTRUCTIONS)
+    if sql_dialect == "duckdb":
+        instructions = instructions + DUCKDB_DIALECT_INSTRUCTIONS
     introspect_schema = create_introspect_schema_tool(
         project_id=project_id,
         pool=pool,
@@ -101,7 +120,7 @@ def _build_agent(project_id: UUID, pool: asyncpg.Pool) -> Agent:
         name="SQL Generator Agent",
         model=OpenAIChat(id=settings.MODEL_ID, api_key=settings.OPENAI_API_KEY),
         tools=[introspect_schema],
-        instructions=AGENT_INSTRUCTIONS,
+        instructions=instructions,
         expected_output=(
             "Either a single ```sql code block containing only the SQL query, "
             "or a short explanation with no SQL when tables are not linked."
@@ -129,11 +148,15 @@ async def generate_sql_for_project(
     pool: asyncpg.Pool,
 ) -> str:
     """Run the schema agent for a project and return generated SQL."""
+    project = await app_db.get_project(pool, project_id)
+    engine = (project["engine"] or "").strip().lower() if project else ""
+    sql_dialect = "duckdb" if engine == "xlsx" else "postgres"
+
     learnings = await get_relevant_learnings(pool, project_id, question)
     context = _format_learnings_context(learnings)
     prompt = f"{context}\n\nUser question: {question}" if context else question
 
-    agent = _build_agent(project_id, pool)
+    agent = _build_agent(project_id, pool, sql_dialect=sql_dialect)
     response = await agent.arun(prompt)
     content = str(response.content or "").strip()
     sql = extract_sql(content)

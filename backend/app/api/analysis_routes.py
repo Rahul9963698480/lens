@@ -1,7 +1,10 @@
+import asyncio
+import json
 from uuid import UUID, uuid4
 
 from asyncpg import Pool
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from app.agent.analysis_agent import (
     AnalysisAlreadyRunError,
@@ -34,6 +37,17 @@ def _require_openai_key() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OPENAI_API_KEY is not configured",
         )
+
+
+def _wants_event_stream(request: Request, stream: bool) -> bool:
+    if stream:
+        return True
+    accept = request.headers.get("accept", "")
+    return "text/event-stream" in accept.lower()
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 @router.post(
@@ -91,18 +105,80 @@ async def start_analysis(
 
 @router.post(
     "/projects/{project_id}/analysis/{analysis_id}/run",
-    response_model=AnalysisRunResponse,
 )
 async def run_analysis(
     project_id: UUID,
     analysis_id: UUID,
+    request: Request,
     pool: Pool = Depends(get_pool),
-) -> AnalysisRunResponse:
+    stream: bool = Query(False),
+):
     await _require_project(pool, project_id)
     _require_openai_key()
 
+    if not _wants_event_stream(request, stream):
+        return AnalysisRunResponse.model_validate(
+            await _run_analysis_payload(project_id, analysis_id, pool)
+        )
+
+    queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+
+    async def on_progress(stage: str, message: str = "") -> None:
+        await queue.put(("progress", {"stage": stage, "message": message}))
+
+    async def run() -> None:
+        try:
+            payload = await run_analysis_chain(
+                project_id=project_id,
+                analysis_id=analysis_id,
+                pool=pool,
+                on_progress=on_progress,
+            )
+            body = AnalysisRunResponse.model_validate(payload).model_dump(mode="json")
+            await queue.put(("complete", body))
+        except AnalysisNotFoundError:
+            await queue.put(("error", {"detail": "Analysis not found", "status": 404}))
+        except AnalysisAlreadyRunError:
+            await queue.put(("error", {"detail": "Analysis has already been run", "status": 409}))
+        except ValueError as exc:
+            await queue.put(("error", {"detail": str(exc), "status": 502}))
+        except Exception:
+            await queue.put(("error", {"detail": "Analysis execution failed", "status": 502}))
+        finally:
+            await queue.put(None)
+
+    async def event_stream():
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event, data = item
+                yield _sse(event, data)
+                if event in ("complete", "error"):
+                    break
+        finally:
+            await task
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _run_analysis_payload(
+    project_id: UUID,
+    analysis_id: UUID,
+    pool: Pool,
+) -> dict:
     try:
-        payload = await run_analysis_chain(
+        return await run_analysis_chain(
             project_id=project_id,
             analysis_id=analysis_id,
             pool=pool,
@@ -127,5 +203,3 @@ async def run_analysis(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Analysis execution failed",
         ) from exc
-
-    return AnalysisRunResponse.model_validate(payload)

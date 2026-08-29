@@ -1,13 +1,14 @@
-"""Infer table relationships from overlapping column values in xlsx SQLite files."""
+"""Infer table relationships from overlapping column values in xlsx DuckDB files."""
 
 from __future__ import annotations
 
 import inspect
 import logging
 import re
-import sqlite3
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
+
+import duckdb
 
 OVERLAP_THRESHOLD = 0.9
 SAMPLE_LIMIT = 1000
@@ -18,7 +19,9 @@ VERIFY_TIMEOUT_SECONDS = 20.0
 _PATTERN_MAJORITY = 0.5
 _MAX_LITERAL_PREFIX = 4
 
-_SKIP_TYPES = frozenset({"REAL", "FLOAT", "DOUBLE", "NUMERIC"})
+_SKIP_TYPES = frozenset(
+    {"REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL", "BLOB", "BYTEA"}
+)
 _YES_RE = re.compile(r"^\s*(yes)\b", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _UUID_RE = re.compile(
@@ -36,16 +39,25 @@ def _quote_ident(name: str) -> str:
 
 
 def _column_type(raw: str | None) -> str:
-    return (raw or "TEXT").strip().upper() or "TEXT"
+    return (raw or "VARCHAR").strip().upper() or "VARCHAR"
 
 
-def _get_columns(conn: sqlite3.Connection, table: str) -> list[tuple[str, str]]:
-    rows = conn.execute(f"PRAGMA table_info({_quote_ident(table)})").fetchall()
-    return [(str(r[1]), _column_type(r[2])) for r in rows]
+def _get_columns(conn: duckdb.DuckDBPyConnection, table: str) -> list[tuple[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'main'
+          AND table_name = ?
+        ORDER BY ordinal_position
+        """,
+        [table],
+    ).fetchall()
+    return [(str(r[0]), _column_type(r[1])) for r in rows]
 
 
 def _get_distinct_values(
-    conn: sqlite3.Connection,
+    conn: duckdb.DuckDBPyConnection,
     table: str,
     column: str,
     limit: int,
@@ -54,10 +66,10 @@ def _get_distinct_values(
         f"SELECT DISTINCT {_quote_ident(column)} FROM {_quote_ident(table)} "
         f"WHERE {_quote_ident(column)} IS NOT NULL LIMIT {int(limit)}"
     )
-    return {row[0] for row in conn.execute(sql)}
+    return {row[0] for row in conn.execute(sql).fetchall()}
 
 
-def _table_row_count(conn: sqlite3.Connection, table: str) -> int:
+def _table_row_count(conn: duckdb.DuckDBPyConnection, table: str) -> int:
     sql = f"SELECT COUNT(*) FROM {_quote_ident(table)}"
     return int(conn.execute(sql).fetchone()[0])
 
@@ -251,7 +263,7 @@ def describe_column_pattern(
 
 
 def infer_relationship_candidates(
-    conn: sqlite3.Connection,
+    conn: duckdb.DuckDBPyConnection,
     tables: list[str],
     *,
     overlap_threshold: float = OVERLAP_THRESHOLD,
@@ -323,7 +335,7 @@ def infer_relationship_candidates(
 
 
 def infer_relationships(
-    conn: sqlite3.Connection,
+    conn: duckdb.DuckDBPyConnection,
     tables: list[str],
     *,
     overlap_threshold: float = OVERLAP_THRESHOLD,
@@ -345,13 +357,13 @@ def infer_relationships(
 
 
 def infer_relationship_candidates_from_path(
-    sqlite_path: str,
+    db_path: str,
     tables: Sequence[str],
     *,
     overlap_threshold: float = OVERLAP_THRESHOLD,
     sample_limit: int = SAMPLE_LIMIT,
 ) -> list[dict[str, Any]]:
-    conn = sqlite3.connect(sqlite_path)
+    conn = duckdb.connect(db_path, read_only=True)
     try:
         return infer_relationship_candidates(
             conn,

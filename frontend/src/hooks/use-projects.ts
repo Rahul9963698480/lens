@@ -123,11 +123,13 @@ export function useStartAnalysis() {
 type RunAnalysisVariables = {
   projectId: string
   analysisId: string
+  onProgress?: (stage: string, message: string) => void
 }
 
 export function useRunAnalysis() {
   return useApiMutation<RunAnalysisVariables, AnalysisRunResponse>(
-    ({ projectId, analysisId }) => projectsApi.runAnalysis(projectId, analysisId),
+    ({ projectId, analysisId, onProgress }) =>
+      projectsApi.runAnalysisStream(projectId, analysisId, onProgress),
     { successMessage: false },
   )
 }

@@ -1,8 +1,9 @@
 import os
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+
+import duckdb
 
 os.environ.setdefault(
     "SUPABASE_DB_URL",
@@ -11,7 +12,7 @@ os.environ.setdefault(
 
 from openpyxl import Workbook
 
-from app.storage.xlsx_ingest import workbook_to_sqlite
+from app.storage.xlsx_ingest import workbook_to_duckdb
 from app.storage.xlsx_relationships import (
     _reply_is_yes,
     _verification_prompt,
@@ -52,10 +53,10 @@ def _unordered_pair(rel: dict) -> frozenset[tuple[str, str]]:
 def _infer_sheets(sheets: dict[str, list[list[object]]]) -> tuple[list[str], list[dict]]:
     with tempfile.TemporaryDirectory() as tmp:
         xlsx_path = Path(tmp) / "book.xlsx"
-        sqlite_path = Path(tmp) / "out.sqlite"
+        duckdb_path = Path(tmp) / "out.duckdb"
         _write_workbook(xlsx_path, sheets)
-        tables = workbook_to_sqlite(xlsx_path, sqlite_path)
-        conn = sqlite3.connect(str(sqlite_path))
+        tables = workbook_to_duckdb(xlsx_path, duckdb_path)
+        conn = duckdb.connect(str(duckdb_path), read_only=True)
         try:
             rels = infer_relationships(conn, tables)
         finally:
@@ -68,10 +69,10 @@ def _candidates_for_sheets(
 ) -> tuple[list[str], list[dict]]:
     with tempfile.TemporaryDirectory() as tmp:
         xlsx_path = Path(tmp) / "book.xlsx"
-        sqlite_path = Path(tmp) / "out.sqlite"
+        duckdb_path = Path(tmp) / "out.duckdb"
         _write_workbook(xlsx_path, sheets)
-        tables = workbook_to_sqlite(xlsx_path, sqlite_path)
-        conn = sqlite3.connect(str(sqlite_path))
+        tables = workbook_to_duckdb(xlsx_path, duckdb_path)
+        conn = duckdb.connect(str(duckdb_path), read_only=True)
         try:
             candidates = infer_relationship_candidates(conn, tables)
         finally:
@@ -149,9 +150,9 @@ _EMPLOYEE_CODE_PAIR = frozenset(
 
 def _candidates_from_xlsx(xlsx: Path) -> list[dict]:
     with tempfile.TemporaryDirectory() as tmp:
-        sqlite_path = Path(tmp) / "out.sqlite"
-        tables = workbook_to_sqlite(xlsx, sqlite_path)
-        conn = sqlite3.connect(str(sqlite_path))
+        duckdb_path = Path(tmp) / "out.duckdb"
+        tables = workbook_to_duckdb(xlsx, duckdb_path)
+        conn = duckdb.connect(str(duckdb_path), read_only=True)
         try:
             return infer_relationship_candidates(conn, tables)
         finally:
@@ -274,9 +275,9 @@ class InferRelationshipsTests(unittest.TestCase):
         xlsx = _ASSETS / "related_workbook.xlsx"
         self.assertTrue(xlsx.exists(), f"missing asset {xlsx}")
         with tempfile.TemporaryDirectory() as tmp:
-            sqlite_path = Path(tmp) / "out.sqlite"
-            tables = workbook_to_sqlite(xlsx, sqlite_path)
-            conn = sqlite3.connect(str(sqlite_path))
+            duckdb_path = Path(tmp) / "out.duckdb"
+            tables = workbook_to_duckdb(xlsx, duckdb_path)
+            conn = duckdb.connect(str(duckdb_path), read_only=True)
             try:
                 rels = infer_relationships(conn, tables)
             finally:
@@ -290,9 +291,9 @@ class InferRelationshipsTests(unittest.TestCase):
         xlsx = _ASSETS / "unrelated_workbook.xlsx"
         self.assertTrue(xlsx.exists(), f"missing asset {xlsx}")
         with tempfile.TemporaryDirectory() as tmp:
-            sqlite_path = Path(tmp) / "out.sqlite"
-            tables = workbook_to_sqlite(xlsx, sqlite_path)
-            conn = sqlite3.connect(str(sqlite_path))
+            duckdb_path = Path(tmp) / "out.duckdb"
+            tables = workbook_to_duckdb(xlsx, duckdb_path)
+            conn = duckdb.connect(str(duckdb_path), read_only=True)
             try:
                 rels = infer_relationships(conn, tables)
             finally:

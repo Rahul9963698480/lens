@@ -8,7 +8,7 @@ from typing import Any
 import asyncpg
 
 from app.db.connectors.base import DBConnector
-from app.db.sql_validation import validate_readonly_sql
+from app.db.sql_validation import validate_readonly_sql, wrap_sql_row_limit
 
 STATEMENT_TIMEOUT_MS = 30_000
 
@@ -283,9 +283,7 @@ class PostgresConnector(DBConnector):
         try:
             conn = await self._connect()
             await conn.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
-            records = await conn.fetch(query)
-            if len(records) > max_rows:
-                records = records[:max_rows]
+            records = await conn.fetch(wrap_sql_row_limit(query, max_rows))
 
             columns = list(records[0].keys()) if records else []
             rows = [

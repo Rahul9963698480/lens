@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -23,7 +24,10 @@ from agno.agent import Agent
 from agno.db.in_memory import InMemoryDb
 from agno.models.openai import OpenAIChat
 
-from app.agent.introspect_schema import create_introspect_schema_tool
+from app.agent.introspect_schema import (
+    create_introspect_schema_tool,
+    schema_context_for_sql,
+)
 from app.agent.sql_executor import execute_sql_for_project
 from app.agent.sql_generator import _format_learnings_context, extract_sql
 from app.config import settings
@@ -35,6 +39,7 @@ logger = logging.getLogger(__name__)
 MAX_ANALYSIS_QUERIES = 2
 RESULT_PREVIEW_ROWS = 50
 JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+AnalysisProgress = Callable[[str, str], Awaitable[None]]
 
 ANALYSIS_INSTRUCTIONS = [
     "You are an expert data analysis agent.",
@@ -45,12 +50,14 @@ ANALYSIS_INSTRUCTIONS = [
     "Step 1 — From the user's question, identify ALL tables required to answer it.",
     "Start by mapping question entities to candidate table names "
     "(e.g. 'customers' -> customer, 'stores' -> store).",
-    "Step 2 — Introspect ONLY the required tables.",
-    "Call `introspect_schema(table_name='<table_name>', include_relationships=true)` "
-    "for each initially identified table.",
-    "After introspecting an initial table, inspect its relationships to discover "
+    "Step 2 — Introspect ONLY the required tables in ONE tool call.",
+    "Call `introspect_schema(table_name='table1,table2', include_relationships=true)` "
+    "with every initially identified table in a comma-separated list. "
+    "Do not make a separate introspect_schema call per table.",
+    "After introspecting, inspect relationships to discover "
     "any additional required tables, including bridge or junction tables such as "
-    "`film_actor`, and introspect those tables before generating SQL.",
+    "`film_actor`, and introspect those missing tables in one more batched call "
+    "before generating SQL.",
     "If the question identifies a table but the required JOIN or bridge table is "
     "not yet known, first introspect the identified table and inspect its "
     "relationships. Use those relationships to discover additional required "
@@ -92,6 +99,13 @@ ANALYSIS_INSTRUCTIONS = [
     'To propose SQL: {"action": "run_query", "sql": "SELECT ..."}',
     'To give a final answer: {"action": "synthesize", "answer": "..."}',
     "When proposing SQL, put the full query in the sql field — no markdown fences.",
+    "When synthesizing, write a readable analysis answer — not one long paragraph "
+    "and never a markdown table (no | pipes). Tables belong in the Data tab.",
+    "Start with one short takeaway sentence, then a blank line, then bullet points "
+    "(- item) for each group or fact. Keep each bullet to one line.",
+    "Example: 'Hyderabad has the most employees.\\n\\n- Hyderabad: 10\\n- Bengaluru: 8'",
+    "Omit groups with zero/null values unless the question asks for them. "
+    "Escape newlines in JSON as \\n. Do not wrap the JSON object in markdown fences.",
 ]
 
 
@@ -180,11 +194,19 @@ def build_analysis_prompt(
     force_synthesize: bool = False,
     learnings_context: str = "",
     schema_in_session: bool = False,
+    schema_context: str = "",
 ) -> str:
     """Build the user prompt. Prior results are plain text, never a tool result."""
     parts: list[str] = []
     if learnings_context:
         parts.append(learnings_context)
+    if schema_context:
+        parts.append(
+            "Schema for tables in the confirmed SQL "
+            "(reuse this; do not introspect these tables again):"
+        )
+        parts.append(schema_context)
+        schema_in_session = True
     parts.append(f"Original question: {question}")
 
     if prior_results:
@@ -198,7 +220,8 @@ def build_analysis_prompt(
         )
         parts.append(
             'Return {"action": "synthesize", "answer": "..."} — do not propose SQL. '
-            "Do not call introspect_schema."
+            "Do not call introspect_schema. Put a one-sentence takeaway, a blank line, "
+            "then bullet points (- item). Never use a markdown table."
         )
     elif prior_results:
         if schema_in_session:
@@ -324,6 +347,8 @@ async def generate_analysis_query(
     force_synthesize: bool = False,
     agent: Agent | None = None,
     schema_in_session: bool = False,
+    learnings_context: str | None = None,
+    schema_context: str = "",
 ) -> dict[str, Any]:
     """Ask the analysis agent to propose SQL or synthesize an answer.
 
@@ -333,15 +358,19 @@ async def generate_analysis_query(
     Pass a reusable ``agent`` (from run_analysis_chain) so later turns in the
     same /run keep introspect_schema results in session history. /analysis/start
     omits it and builds a fresh agent.
+
+    Pass ``learnings_context`` to skip a repeated confirmed-learnings lookup.
     """
-    learnings_rows = await get_relevant_learnings(pool, project_id, question)
-    context = _format_learnings_context(learnings_rows)
+    if learnings_context is None:
+        learnings_rows = await get_relevant_learnings(pool, project_id, question)
+        learnings_context = _format_learnings_context(learnings_rows)
     prompt = build_analysis_prompt(
         question,
         prior_results=prior_results,
         force_synthesize=force_synthesize,
-        learnings_context=context,
+        learnings_context=learnings_context,
         schema_in_session=schema_in_session,
+        schema_context=schema_context,
     )
 
     reuse_session = agent is not None
@@ -374,6 +403,164 @@ def _attempt_already_executed(status: str | None) -> bool:
     return status not in (None, "not_run")
 
 
+def _result_needs_followup(result: dict[str, Any]) -> bool:
+    """Second query only when the first result cannot answer the question."""
+    if result.get("status") == "error":
+        return True
+    return int(result.get("row_count") or 0) <= 0
+
+
+async def _emit_progress(
+    on_progress: AnalysisProgress | None,
+    stage: str,
+    message: str = "",
+) -> None:
+    if on_progress is None:
+        return
+    await on_progress(stage, message)
+
+
+def _chain_payload(
+    analysis_id: UUID,
+    answer: str,
+    queries_run: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "analysis_id": analysis_id,
+        "answer": answer,
+        "queries_used": [
+            {
+                "attempt_id": item["attempt_id"],
+                "sql": item["sql"],
+                "result_summary": summarize_result(item["result"]),
+            }
+            for item in queries_run
+        ],
+    }
+
+
+async def run_analysis_chain(
+    *,
+    project_id: UUID,
+    analysis_id: UUID,
+    pool: asyncpg.Pool,
+    on_progress: AnalysisProgress | None = None,
+) -> dict[str, Any]:
+    """Execute the confirmed analysis: at most MAX_ANALYSIS_QUERIES queries.
+
+    Happy path is execute then one synthesize LLM call. A follow-up LLM runs
+    only when the first result is empty or failed. A second synthesize is
+    skipped when that follow-up already returned an answer.
+
+    Schema for tables in the confirmed SQL is injected from the catalog so
+    /run does not re-introspect. Learnings are loaded once per chain.
+    """
+    attempts = await learnings.list_attempts_for_analysis(pool, project_id, analysis_id)
+    if not attempts:
+        raise AnalysisNotFoundError("Analysis not found")
+    if any(_attempt_already_executed(row["execution_status"]) for row in attempts):
+        raise AnalysisAlreadyRunError("Analysis has already been run")
+
+    first = attempts[0]
+    question = first["question"]
+    current_sql = first["generated_sql"]
+    current_attempt_id = first["id"]
+    queries_run: list[dict[str, Any]] = []
+    pending_answer: str | None = None
+
+    learnings_rows = await get_relevant_learnings(pool, project_id, question)
+    learnings_context = _format_learnings_context(learnings_rows)
+    schema_context = await schema_context_for_sql(pool, project_id, current_sql)
+
+    agent = _build_analysis_agent(
+        project_id, pool, session_id=str(analysis_id)
+    )
+
+    for _ in range(MAX_ANALYSIS_QUERIES):
+        await _emit_progress(
+            on_progress,
+            "executing",
+            f"Running query {len(queries_run) + 1}…",
+        )
+        result = await _execute_and_record(
+            pool=pool,
+            project_id=project_id,
+            attempt_id=current_attempt_id,
+            sql=current_sql,
+        )
+        queries_run.append(
+            {
+                "attempt_id": current_attempt_id,
+                "sql": current_sql,
+                "result": result,
+            }
+        )
+        logger.info(
+            "analysis_id=%s executed attempt_id=%s queries_run=%s",
+            analysis_id,
+            current_attempt_id,
+            len(queries_run),
+        )
+
+        if len(queries_run) >= MAX_ANALYSIS_QUERIES:
+            break
+        if not _result_needs_followup(result):
+            break
+
+        await _emit_progress(
+            on_progress,
+            "followup",
+            "Checking if another query is needed…",
+        )
+        decision = await generate_analysis_query(
+            project_id=project_id,
+            pool=pool,
+            question=question,
+            prior_results=[item["result"] for item in queries_run],
+            agent=agent,
+            schema_in_session=True,
+            learnings_context=learnings_context,
+            schema_context=schema_context,
+        )
+        if decision.get("action") == "synthesize" and decision.get("answer"):
+            pending_answer = str(decision["answer"])
+            break
+        if decision.get("action") != "run_query" or not decision.get("sql"):
+            break
+
+        new_attempt = await learnings.insert_query_attempt(
+            pool,
+            project_id=project_id,
+            question=question,
+            generated_sql=decision["sql"],
+            analysis_id=analysis_id,
+        )
+        current_sql = decision["sql"]
+        current_attempt_id = new_attempt["id"]
+        extra_schema = await schema_context_for_sql(pool, project_id, current_sql)
+        if extra_schema:
+            schema_context = extra_schema
+
+    if pending_answer:
+        await _emit_progress(on_progress, "complete", "Done")
+        return _chain_payload(analysis_id, pending_answer, queries_run)
+
+    await _emit_progress(on_progress, "synthesizing", "Writing answer…")
+    synthesized = await generate_analysis_query(
+        project_id=project_id,
+        pool=pool,
+        question=question,
+        prior_results=[item["result"] for item in queries_run],
+        force_synthesize=True,
+        agent=agent,
+        schema_in_session=True,
+        learnings_context=learnings_context,
+        schema_context=schema_context,
+    )
+    await _emit_progress(on_progress, "complete", "Done")
+    return _chain_payload(analysis_id, synthesized["answer"], queries_run)
+
+
 async def _execute_and_record(
     *,
     pool: asyncpg.Pool,
@@ -383,7 +570,9 @@ async def _execute_and_record(
 ) -> dict[str, Any]:
     """Run one query through the existing execute-sql path and persist status."""
     try:
-        payload = await execute_sql_for_project(project_id, sql, pool)
+        payload = await execute_sql_for_project(
+            project_id, sql, pool, max_rows=RESULT_PREVIEW_ROWS
+        )
     except ValueError as exc:
         await learnings.update_attempt_execution(
             pool,
@@ -417,103 +606,3 @@ async def _execute_and_record(
     )
     return payload
 
-
-async def run_analysis_chain(
-    *,
-    project_id: UUID,
-    analysis_id: UUID,
-    pool: asyncpg.Pool,
-) -> dict[str, Any]:
-    """Execute the confirmed analysis: at most MAX_ANALYSIS_QUERIES queries.
-
-    Constructs one Agent at the start of this /run and reuses it for the
-    follow-up decision turn and the synthesize turn so introspect_schema
-    results stay in session history.
-    """
-    attempts = await learnings.list_attempts_for_analysis(pool, project_id, analysis_id)
-    if not attempts:
-        raise AnalysisNotFoundError("Analysis not found")
-    if any(_attempt_already_executed(row["execution_status"]) for row in attempts):
-        raise AnalysisAlreadyRunError("Analysis has already been run")
-
-    first = attempts[0]
-    question = first["question"]
-    current_sql = first["generated_sql"]
-    current_attempt_id = first["id"]
-    queries_run: list[dict[str, Any]] = []
-
-    # One Agent for every LLM turn in this /run. Agno history (tool results
-    # included) is stored on InMemoryDb so introspect_schema is not repeated.
-    agent = _build_analysis_agent(
-        project_id, pool, session_id=str(analysis_id)
-    )
-    schema_in_session = False
-
-    for _ in range(MAX_ANALYSIS_QUERIES):
-        result = await _execute_and_record(
-            pool=pool,
-            project_id=project_id,
-            attempt_id=current_attempt_id,
-            sql=current_sql,
-        )
-        queries_run.append(
-            {
-                "attempt_id": current_attempt_id,
-                "sql": current_sql,
-                "result": result,
-            }
-        )
-        logger.info(
-            "analysis_id=%s executed attempt_id=%s queries_run=%s",
-            analysis_id,
-            current_attempt_id,
-            len(queries_run),
-        )
-
-        if len(queries_run) >= MAX_ANALYSIS_QUERIES:
-            break
-
-        decision = await generate_analysis_query(
-            project_id=project_id,
-            pool=pool,
-            question=question,
-            prior_results=[item["result"] for item in queries_run],
-            agent=agent,
-            schema_in_session=schema_in_session,
-        )
-        schema_in_session = True
-        if decision.get("action") != "run_query" or not decision.get("sql"):
-            break
-
-        new_attempt = await learnings.insert_query_attempt(
-            pool,
-            project_id=project_id,
-            question=question,
-            generated_sql=decision["sql"],
-            analysis_id=analysis_id,
-        )
-        current_sql = decision["sql"]
-        current_attempt_id = new_attempt["id"]
-
-    synthesized = await generate_analysis_query(
-        project_id=project_id,
-        pool=pool,
-        question=question,
-        prior_results=[item["result"] for item in queries_run],
-        force_synthesize=True,
-        agent=agent,
-        schema_in_session=schema_in_session,
-    )
-
-    return {
-        "analysis_id": analysis_id,
-        "answer": synthesized["answer"],
-        "queries_used": [
-            {
-                "attempt_id": item["attempt_id"],
-                "sql": item["sql"],
-                "result_summary": summarize_result(item["result"]),
-            }
-            for item in queries_run
-        ],
-    }

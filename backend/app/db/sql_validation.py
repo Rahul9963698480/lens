@@ -31,3 +31,11 @@ def validate_readonly_sql(sql: str) -> str:
         raise ValueError("Only read-only SELECT queries are allowed.")
 
     return text
+
+
+def wrap_sql_row_limit(sql: str, max_rows: int) -> str:
+    """Cap returned rows in the database instead of fetching a large result first."""
+    limit = int(max_rows)
+    if limit <= 0:
+        return sql
+    return f"SELECT * FROM ({sql}) AS _lens_limited LIMIT {limit}"

@@ -21,17 +21,17 @@ class XlsxCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_second_call_skips_download(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            local_path = str(Path(tmp) / "proj.sqlite")
-            Path(local_path).write_bytes(b"sqlite")
+            local_path = str(Path(tmp) / "proj.duckdb")
+            Path(local_path).write_bytes(b"duckdb")
             xlsx_cache.seed_local_cache("proj-1", local_path)
 
             download = AsyncMock()
             with patch("app.storage.xlsx_cache.download_file", download):
                 first = await xlsx_cache.get_cached_local_path(
-                    "proj-1", "xlsx-projects/proj-1.sqlite"
+                    "proj-1", "xlsx-projects/proj-1.duckdb"
                 )
                 second = await xlsx_cache.get_cached_local_path(
-                    "proj-1", "xlsx-projects/proj-1.sqlite"
+                    "proj-1", "xlsx-projects/proj-1.duckdb"
                 )
 
             self.assertEqual(first, local_path)
@@ -52,10 +52,10 @@ class XlsxCacheTests(unittest.IsolatedAsyncioTestCase):
                 patch("app.storage.xlsx_cache.download_file", download),
             ):
                 first = await xlsx_cache.get_cached_local_path(
-                    "proj-2", "xlsx-projects/proj-2.sqlite"
+                    "proj-2", "xlsx-projects/proj-2.duckdb"
                 )
                 second = await xlsx_cache.get_cached_local_path(
-                    "proj-2", "xlsx-projects/proj-2.sqlite"
+                    "proj-2", "xlsx-projects/proj-2.duckdb"
                 )
 
             self.assertEqual(Path(first).read_bytes(), b"downloaded")
@@ -64,8 +64,8 @@ class XlsxCacheTests(unittest.IsolatedAsyncioTestCase):
 
     def test_evict_removes_file_and_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            local_path = Path(tmp) / "proj.sqlite"
-            local_path.write_bytes(b"sqlite")
+            local_path = Path(tmp) / "proj.duckdb"
+            local_path.write_bytes(b"duckdb")
             xlsx_cache.seed_local_cache("proj-3", str(local_path))
             xlsx_cache.evict_local_cache("proj-3")
             self.assertNotIn("proj-3", xlsx_cache._local_cache)

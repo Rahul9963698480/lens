@@ -13,7 +13,101 @@ import type {
   AnalysisStartRequest,
   AnalysisStartResponse,
 } from '@/types/analysis'
+import { config } from '@/config/env'
+import { apiErrorMessage } from './error-message'
 import axiosInstance from './axios-instance'
+
+type SseEvent = {
+  event: string
+  data: string
+}
+
+function parseSseChunk(buffer: string): { events: SseEvent[]; rest: string } {
+  const events: SseEvent[] = []
+  const parts = buffer.split('\n\n')
+  const rest = parts.pop() ?? ''
+  for (const part of parts) {
+    let event = 'message'
+    const dataLines: string[] = []
+    for (const line of part.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim())
+      }
+    }
+    if (dataLines.length > 0) {
+      events.push({ event, data: dataLines.join('\n') })
+    }
+  }
+  return { events, rest }
+}
+
+async function runAnalysisStream(
+  projectId: string,
+  analysisId: string,
+  onProgress?: (stage: string, message: string) => void,
+): Promise<AnalysisRunResponse> {
+  const url = `${config.apiUrl}/projects/${projectId}/analysis/${analysisId}/run?stream=1`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Accept: 'text/event-stream' },
+  })
+
+  if (!response.ok) {
+    let body: unknown = null
+    try {
+      body = await response.json()
+    } catch {
+      body = null
+    }
+    throw new Error(apiErrorMessage(body, 'Failed to run analysis.'))
+  }
+
+  if (!response.body) {
+    throw new Error('Analysis stream is empty.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let complete: AnalysisRunResponse | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    buffer += decoder.decode(value, { stream: true })
+    const parsed = parseSseChunk(buffer)
+    buffer = parsed.rest
+    for (const item of parsed.events) {
+      let payload: Record<string, unknown> = {}
+      try {
+        payload = JSON.parse(item.data) as Record<string, unknown>
+      } catch {
+        payload = {}
+      }
+      if (item.event === 'progress') {
+        onProgress?.(
+          String(payload.stage ?? ''),
+          String(payload.message ?? ''),
+        )
+      } else if (item.event === 'complete') {
+        complete = payload as unknown as AnalysisRunResponse
+      } else if (item.event === 'error') {
+        throw new Error(
+          apiErrorMessage(payload, 'Failed to run analysis.'),
+        )
+      }
+    }
+  }
+
+  if (!complete) {
+    throw new Error('Analysis stream ended without a result.')
+  }
+  return complete
+}
 
 const projectsApi = {
   list: () => axiosInstance.get<Project[]>('/projects'),
@@ -59,6 +153,11 @@ const projectsApi = {
     axiosInstance.post<AnalysisRunResponse>(
       `/projects/${projectId}/analysis/${analysisId}/run`,
     ),
+  runAnalysisStream: (
+    projectId: string,
+    analysisId: string,
+    onProgress?: (stage: string, message: string) => void,
+  ) => runAnalysisStream(projectId, analysisId, onProgress),
   submitFeedback: (
     projectId: string,
     attemptId: string,

@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.db.connectors.base import DBConnector
+from app.db.connectors.duckdb_file import DuckDBFileConnector
 from app.db.connectors.mongodb import MongoDBConnector
 from app.db.connectors.postgres import PostgresConnector
-from app.db.connectors.sqlite_file import SQLiteFileConnector
 
 DEFAULT_PORTS = {
     "postgres": 5432,
@@ -46,7 +46,7 @@ def get_connector_from_project(project: Mapping[str, Any]) -> DBConnector:
         file_path = project["file_path"]
         if not file_path:
             raise ValueError("xlsx project is missing file_path")
-        return SQLiteFileConnector(str(project["id"]), file_path)
+        return DuckDBFileConnector(str(project["id"]), file_path)
     return get_connector(
         engine,
         project["db_host"],
