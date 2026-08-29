@@ -11,7 +11,7 @@ import duckdb
 
 from app.config import settings
 from app.db.connectors.base import DBConnector
-from app.db.sql_validation import validate_readonly_sql
+from app.db.sql_validation import validate_readonly_sql, wrap_sql_row_limit
 from app.storage.xlsx_cache import get_cached_local_path
 from app.storage.xlsx_indexes import apply_storage_optimizations
 from app.storage.xlsx_relationships import (
@@ -234,9 +234,7 @@ class DuckDBFileConnector(DBConnector):
             conn = duckdb.connect(path, read_only=True)
             try:
                 _configure_connection(conn)
-                df = conn.execute(query).fetchdf()
-                if len(df) > max_rows:
-                    df = df.iloc[:max_rows]
+                df = conn.execute(wrap_sql_row_limit(query, max_rows)).fetchdf()
                 columns = list(df.columns)
                 rows = [
                     {col: _serialize_value(row[col]) for col in columns}

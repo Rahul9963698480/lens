@@ -37,6 +37,7 @@ type ChatMessage = {
   attachments: ChatAttachment[]
   generating?: boolean
   running?: boolean
+  runningStage?: string
   analysisResult?: AnalysisRunResponse
   error?: string
 }
@@ -66,6 +67,9 @@ function getSpeechRecognition(): SpeechRecognitionLike | null {
 }
 
 function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message
+  }
   const axiosData =
     typeof error === 'object' && error !== null && 'response' in error
       ? (error as { response?: { data?: unknown } }).response?.data
@@ -369,6 +373,7 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
 
     updateMessage(messageId, {
       running: true,
+      runningStage: 'Running query…',
       error: undefined,
       analysisResult: undefined,
     })
@@ -377,9 +382,16 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
       const result = await runAnalysis.mutateAsync({
         projectId,
         analysisId,
+        onProgress: (_stage, message) => {
+          updateMessage(messageId, {
+            running: true,
+            runningStage: message || 'Running analysis…',
+          })
+        },
       })
       updateMessage(messageId, {
         running: false,
+        runningStage: undefined,
         analysisResult: result,
       })
       setConfirmDialog(null)
@@ -526,7 +538,7 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
                     {message.running ? (
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <BrandSpinner size={18} label="Running analysis" />
-                        Running analysis…
+                        {message.runningStage || 'Running analysis…'}
                       </div>
                     ) : null}
                     {message.error && !message.analysisResult ? (

@@ -30,12 +30,14 @@ AGENT_INSTRUCTIONS = [
     "Step 1 — From the user's question, identify ALL tables required to answer it.",
     "Start by mapping question entities to candidate table names "
     "(e.g. 'customers' -> customer, 'stores' -> store).",
-    "Step 2 — Introspect ONLY the required tables.",
-    "Call `introspect_schema(table_name='<table_name>', include_relationships=true)` "
-    "for each initially identified table.",
-    "After introspecting an initial table, inspect its relationships to discover "
+    "Step 2 — Introspect ONLY the required tables in ONE tool call.",
+    "Call `introspect_schema(table_name='table1,table2', include_relationships=true)` "
+    "with every initially identified table in a comma-separated list. "
+    "Do not make a separate introspect_schema call per table.",
+    "After introspecting, inspect relationships to discover "
     "any additional required tables, including bridge or junction tables such as "
-    "`film_actor`, and introspect those tables before generating SQL.",
+    "`film_actor`, and introspect those missing tables in one more batched call "
+    "before generating SQL.",
     "If the question identifies a table but the required JOIN or bridge table is "
     "not yet known, first introspect the identified table and inspect its "
     "relationships. Use those relationships to discover additional required "

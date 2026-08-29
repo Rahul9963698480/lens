@@ -21,6 +21,7 @@ export default defineConfig({
       "/projects": {
         target: "http://127.0.0.1:8000",
         changeOrigin: true,
+        timeout: 300000,
       },
       "/health": {
         target: "http://127.0.0.1:8000",

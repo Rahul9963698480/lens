@@ -177,7 +177,9 @@ export function AnalysisResultCard({
         </TabsList>
 
         <TabsContent value="analysis" className="mt-3">
-          <p className="text-sm leading-relaxed text-foreground">{result.answer}</p>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+            {result.answer}
+          </p>
         </TabsContent>
 
         <TabsContent value="data" className="mt-3">
