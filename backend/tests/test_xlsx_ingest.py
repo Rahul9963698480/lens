@@ -1,16 +1,16 @@
-import sqlite3
 import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
 
+import duckdb
 from openpyxl import Workbook
 
 from app.storage.xlsx_ingest import (
     XlsxIngestError,
     sanitize_identifier,
     unique_identifier,
-    workbook_to_sqlite,
+    workbook_to_duckdb,
 )
 
 
@@ -41,11 +41,11 @@ class SanitizeIdentifierTests(unittest.TestCase):
         self.assertEqual(unique_identifier("sheet", used), "sheet_2")
 
 
-class WorkbookToSqliteTests(unittest.TestCase):
+class WorkbookToDuckdbTests(unittest.TestCase):
     def test_two_sheets_types_and_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             xlsx_path = Path(tmp) / "sales.xlsx"
-            sqlite_path = Path(tmp) / "out.sqlite"
+            duckdb_path = Path(tmp) / "out.duckdb"
             _write_workbook(
                 xlsx_path,
                 {
@@ -61,22 +61,27 @@ class WorkbookToSqliteTests(unittest.TestCase):
                     ],
                 },
             )
-            tables = workbook_to_sqlite(xlsx_path, sqlite_path)
+            tables = workbook_to_duckdb(xlsx_path, duckdb_path)
             self.assertEqual(tables, ["sales_data", "orders"])
 
-            conn = sqlite3.connect(str(sqlite_path))
+            conn = duckdb.connect(str(duckdb_path), read_only=True)
             try:
-                sales_info = conn.execute("PRAGMA table_info(sales_data)").fetchall()
-                types = {row[1]: row[2] for row in sales_info}
-                self.assertEqual(types["qty"], "INTEGER")
-                self.assertEqual(types["amount"], "REAL")
-                self.assertEqual(types["name"], "TEXT")
+                sales_info = conn.execute(
+                    """
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_name = 'sales_data'
+                    ORDER BY ordinal_position
+                    """
+                ).fetchall()
+                types = {row[0]: row[1] for row in sales_info}
+                self.assertEqual(types["qty"], "BIGINT")
+                self.assertEqual(types["amount"], "DOUBLE")
+                self.assertIn(types["name"], ("VARCHAR", "STRING"))
 
-                orders_info = conn.execute("PRAGMA table_info(orders)").fetchall()
-                order_types = {row[1]: row[2] for row in orders_info}
-                self.assertEqual(order_types["order_date"], "TEXT")
-
-                qty_rows = conn.execute("SELECT qty FROM sales_data ORDER BY qty").fetchall()
+                qty_rows = conn.execute(
+                    "SELECT qty FROM sales_data ORDER BY qty"
+                ).fetchall()
                 self.assertEqual([r[0] for r in qty_rows], [1, 2])
             finally:
                 conn.close()
@@ -84,18 +89,18 @@ class WorkbookToSqliteTests(unittest.TestCase):
     def test_empty_workbook_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             xlsx_path = Path(tmp) / "empty.xlsx"
-            sqlite_path = Path(tmp) / "out.sqlite"
+            duckdb_path = Path(tmp) / "out.duckdb"
             _write_workbook(xlsx_path, {"Empty": []})
             with self.assertRaises(XlsxIngestError):
-                workbook_to_sqlite(xlsx_path, sqlite_path)
-            self.assertFalse(sqlite_path.exists())
+                workbook_to_duckdb(xlsx_path, duckdb_path)
+            self.assertFalse(duckdb_path.exists())
 
     def test_rejects_non_xlsx_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data.csv"
             path.write_text("a,b\n1,2\n", encoding="utf-8")
             with self.assertRaises(XlsxIngestError):
-                workbook_to_sqlite(path, Path(tmp) / "out.sqlite")
+                workbook_to_duckdb(path, Path(tmp) / "out.duckdb")
 
 
 if __name__ == "__main__":

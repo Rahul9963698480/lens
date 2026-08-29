@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -10,7 +11,7 @@ from fastapi.responses import JSONResponse
 from app.db import app_db, schema_catalog
 from app.db.app_db import get_pool
 from app.db.connectors import get_connector, get_connector_from_project, resolve_db_port
-from app.db.connectors.sqlite_file import SQLiteFileConnector
+from app.db.connectors.duckdb_file import DuckDBFileConnector
 from app.schemas.project import (
     CatalogTableSchema,
     ColumnAnnotationUpdate,
@@ -20,9 +21,14 @@ from app.schemas.project import (
     ProjectSchemaResponse,
     TableAnnotationUpdate,
 )
-from app.storage.supabase_storage import delete_file, storage_object_path, upload_file
-from app.storage.xlsx_cache import evict_local_cache, local_sqlite_path, seed_local_cache
-from app.storage.xlsx_ingest import XlsxIngestError, workbook_to_sqlite
+from app.storage.supabase_storage import delete_file, storage_object_path
+from app.storage.xlsx_cache import (
+    evict_local_cache,
+    local_duckdb_path,
+    persist_indexed_duckdb,
+    seed_local_cache,
+)
+from app.storage.xlsx_ingest import XlsxIngestError, workbook_to_duckdb
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +48,7 @@ async def _cleanup_xlsx_artifacts(
     pool: Pool,
     project_id: UUID,
     storage_path: str,
-    sqlite_path: Path,
+    duckdb_path: Path,
     row_created: bool,
     uploaded: bool,
 ) -> None:
@@ -61,10 +67,10 @@ async def _cleanup_xlsx_artifacts(
     except Exception:
         logger.warning("Failed to evict local cache for %s during cleanup", project_id)
     try:
-        if sqlite_path.exists():
-            sqlite_path.unlink()
+        if duckdb_path.exists():
+            duckdb_path.unlink()
     except OSError:
-        logger.warning("Failed to delete local sqlite %s during cleanup", sqlite_path)
+        logger.warning("Failed to delete local duckdb %s during cleanup", duckdb_path)
 
 
 async def _cleanup_xlsx_on_delete(engine: str, file_path: str | None, project_id: UUID) -> None:
@@ -161,7 +167,7 @@ async def upload_xlsx_project(
 
     project_id = uuid4()
     storage_path = storage_object_path(str(project_id))
-    sqlite_path = local_sqlite_path(str(project_id))
+    duckdb_path = local_duckdb_path(str(project_id))
     uploaded = False
     row_created = False
     xlsx_tmp: Path | None = None
@@ -175,10 +181,8 @@ async def upload_xlsx_project(
             tmp.write(content)
             xlsx_tmp = Path(tmp.name)
 
-        workbook_to_sqlite(xlsx_tmp, sqlite_path)
-        await upload_file(storage_path, str(sqlite_path))
-        uploaded = True
-        seed_local_cache(str(project_id), str(sqlite_path))
+        workbook_to_duckdb(xlsx_tmp, duckdb_path)
+        seed_local_cache(str(project_id), str(duckdb_path))
 
         row = await app_db.create_project(
             pool,
@@ -194,17 +198,19 @@ async def upload_xlsx_project(
         )
         row_created = True
 
-        connector = SQLiteFileConnector(str(project_id), storage_path)
+        connector = DuckDBFileConnector(str(project_id), storage_path)
         await schema_catalog.extract_and_store_schema(
             pool, row["id"], row["db_name"], connector
         )
+        await persist_indexed_duckdb(storage_path, str(duckdb_path))
+        uploaded = True
         return ProjectResponse(**app_db.record_to_dict(row))
     except XlsxIngestError as exc:
         await _cleanup_xlsx_artifacts(
             pool=pool,
             project_id=project_id,
             storage_path=storage_path,
-            sqlite_path=sqlite_path,
+            duckdb_path=duckdb_path,
             row_created=row_created,
             uploaded=uploaded,
         )
@@ -217,7 +223,7 @@ async def upload_xlsx_project(
             pool=pool,
             project_id=project_id,
             storage_path=storage_path,
-            sqlite_path=sqlite_path,
+            duckdb_path=duckdb_path,
             row_created=row_created,
             uploaded=uploaded,
         )
@@ -284,15 +290,18 @@ async def preview_project(
             detail="Could not connect to the project's external database.",
         ) from None
 
-    tables = []
-    for table_name in table_names:
-        result = await connector.preview_table(table_name, limit=5)
-        entry = {"table_name": table_name, "columns": result.get("columns", [])}
+    preview_limit = 5
+
+    async def _preview_one(table_name: str) -> dict:
+        result = await connector.preview_table(table_name, limit=preview_limit)
+        entry: dict = {"table_name": table_name, "columns": result.get("columns", [])}
         if "error" in result:
             entry["error"] = result["error"]
         else:
             entry["rows"] = result.get("rows", [])
-        tables.append(entry)
+        return entry
+
+    tables = list(await asyncio.gather(*(_preview_one(name) for name in table_names)))
 
     return ProjectPreviewResponse(project_id=project_id, tables=tables)
 
@@ -318,6 +327,10 @@ async def sync_project_schema(
         rows = await schema_catalog.extract_and_store_schema(
             pool, project_id, project["db_name"], connector
         )
+        if (project["engine"] or "").strip().lower() == "xlsx" and project.get("file_path"):
+            duckdb_path = local_duckdb_path(str(project_id))
+            if duckdb_path.exists():
+                await persist_indexed_duckdb(project["file_path"], str(duckdb_path))
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
