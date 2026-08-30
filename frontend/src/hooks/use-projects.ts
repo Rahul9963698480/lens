@@ -16,12 +16,15 @@ import type {
   AnalysisRunResponse,
   AnalysisStartResponse,
 } from '@/types/analysis'
+import type { PlaygroundConversation } from '@/types/conversation'
 export const projectKeys = {
   all: ['projects'] as const,
   schema: (projectId: string) =>
     [...projectKeys.all, projectId, 'schema'] as const,
   preview: (projectId: string) =>
     [...projectKeys.all, projectId, 'preview'] as const,
+  conversations: (projectId: string) =>
+    [...projectKeys.all, projectId, 'conversations'] as const,
 }
 
 export function useProjects() {
@@ -111,11 +114,16 @@ export function useUpdateTableAnnotations(projectId: string | undefined) {
 type StartAnalysisVariables = {
   projectId: string
   question: string
+  conversationId?: string | null
 }
 
 export function useStartAnalysis() {
   return useApiMutation<StartAnalysisVariables, AnalysisStartResponse>(
-    ({ projectId, question }) => projectsApi.startAnalysis(projectId, { question }),
+    ({ projectId, question, conversationId }) =>
+      projectsApi.startAnalysis(projectId, {
+        question,
+        conversation_id: conversationId ?? undefined,
+      }),
     { successMessage: false },
   )
 }
@@ -123,14 +131,52 @@ export function useStartAnalysis() {
 type RunAnalysisVariables = {
   projectId: string
   analysisId: string
+  conversationId?: string | null
   onProgress?: (stage: string, message: string) => void
 }
 
 export function useRunAnalysis() {
   return useApiMutation<RunAnalysisVariables, AnalysisRunResponse>(
-    ({ projectId, analysisId, onProgress }) =>
-      projectsApi.runAnalysisStream(projectId, analysisId, onProgress),
+    ({ projectId, analysisId, conversationId, onProgress }) =>
+      projectsApi.runAnalysisStream(
+        projectId,
+        analysisId,
+        onProgress,
+        conversationId,
+      ),
     { successMessage: false },
+  )
+}
+
+export function useConversations(projectId: string | undefined) {
+  return useApiQuery<PlaygroundConversation[]>(
+    projectKeys.conversations(projectId ?? ''),
+    () => projectsApi.listConversations(projectId!),
+    { enabled: Boolean(projectId) },
+  )
+}
+
+type DeleteConversationVariables = {
+  projectId: string
+  conversationId: string
+}
+
+export function useDeleteConversation(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useApiMutation<DeleteConversationVariables, void>(
+    ({ projectId: id, conversationId }) =>
+      projectsApi.deleteConversation(id, conversationId),
+    {
+      successMessage: false,
+      onSuccess: () => {
+        if (projectId) {
+          queryClient.invalidateQueries({
+            queryKey: projectKeys.conversations(projectId),
+          })
+        }
+      },
+    },
   )
 }
 

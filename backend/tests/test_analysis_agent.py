@@ -16,6 +16,7 @@ from app.agent.analysis_agent import (
     AnalysisNotFoundError,
     _build_analysis_agent,
     build_analysis_prompt,
+    format_conversation_history,
     generate_analysis_query,
     parse_analysis_response,
     run_analysis_chain,
@@ -136,7 +137,23 @@ class AnalysisPromptTests(unittest.TestCase):
         self.assertIn("same conversation", text)
         self.assertIn("bullet points", text)
         self.assertIn("never a markdown table", text)
+        self.assertIn("Never write SQL", text)
         self.assertNotIn("call execute_query", text.lower())
+
+    def test_conversation_history_is_question_sql_answer_only(self) -> None:
+        text = format_conversation_history(
+            [
+                {
+                    "question": "lastname of customer akash",
+                    "sql": "SELECT lastname FROM employeee_data WHERE firstname = 'Akash'",
+                    "answer": "Nagaraj",
+                }
+            ]
+        )
+        self.assertIn("firstname = 'Akash'", text)
+        self.assertIn("Nagaraj", text)
+        self.assertNotIn("rows_preview", text)
+        self.assertNotIn("graph", text.lower())
 
 
 class AnalysisAgentToolsTests(unittest.TestCase):
@@ -164,7 +181,8 @@ class AnalysisAgentToolsTests(unittest.TestCase):
         self.assertEqual(captured["tools"], [sentinel])
         self.assertEqual(len(captured["tools"]), 1)
         self.assertTrue(captured["add_history_to_context"])
-        self.assertTrue(captured["store_tool_messages"])
+        self.assertFalse(captured["store_tool_messages"])
+        self.assertTrue(captured["store_history_messages"])
         self.assertIsNotNone(captured["db"])
         self.assertEqual(captured["session_id"], None)
 
@@ -187,6 +205,33 @@ class AnalysisAgentToolsTests(unittest.TestCase):
 
         self.assertEqual(captured["session_id"], "analysis-session")
         self.assertTrue(captured["add_history_to_context"])
+
+    def test_persist_chat_does_not_use_agno_run_history(self) -> None:
+        captured: dict = {}
+
+        def fake_agent(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch(
+                "app.agent.analysis_agent.create_introspect_schema_tool",
+                return_value=object(),
+            ),
+            patch("app.agent.analysis_agent.OpenAIChat"),
+            patch("app.agent.analysis_agent.Agent", side_effect=fake_agent),
+        ):
+            _build_analysis_agent(
+                uuid4(), MagicMock(), session_id="chat-1", persist_chat=True
+            )
+
+        self.assertFalse(captured["add_history_to_context"])
+        self.assertFalse(captured.get("enable_session_summaries", False))
+        self.assertFalse(captured.get("add_session_summary_to_context", False))
+        self.assertNotIn("num_history_runs", captured)
+        self.assertNotIn("db", captured)
+        self.assertFalse(captured["store_tool_messages"])
+        self.assertEqual(captured["session_id"], "chat-1")
 
 
 class RunAnalysisChainTests(unittest.IsolatedAsyncioTestCase):
@@ -486,12 +531,53 @@ class GenerateAnalysisQuerySessionTests(unittest.IsolatedAsyncioTestCase):
             result = await generate_analysis_query(
                 project_id=uuid4(),
                 pool=MagicMock(),
-                question="q",
+                question="which region is he from",
+                conversation_context=(
+                    "Turn 1\nQuestion: lastname of customer akash\n"
+                    "SQL: SELECT lastname FROM employeee_data WHERE firstname = 'Akash'\n"
+                    "Answer: Nagaraj"
+                ),
             )
 
         build.assert_called_once()
+        self.assertFalse(build.call_args.kwargs.get("persist_chat"))
+        prompt = agent.arun.await_args.args[0]
+        self.assertIn("firstname = 'Akash'", prompt)
+        self.assertIn("which region is he from", prompt)
+        self.assertNotIn("rows_preview", prompt)
         agent.arun.assert_awaited_once()
         self.assertEqual(result["sql"], "SELECT 1")
+
+    async def test_forwards_persist_chat_and_session_id(self) -> None:
+        agent = MagicMock()
+        agent.tools = []
+        agent.arun = AsyncMock(
+            return_value=MagicMock(
+                content='{"action": "run_query", "sql": "SELECT 1"}',
+                tools=[],
+            )
+        )
+        with (
+            patch(
+                "app.agent.analysis_agent.get_relevant_learnings",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "app.agent.analysis_agent._build_analysis_agent",
+                return_value=agent,
+            ) as build,
+        ):
+            await generate_analysis_query(
+                project_id=uuid4(),
+                pool=MagicMock(),
+                question="q",
+                persist_chat=True,
+                session_id="conv-1",
+            )
+
+        self.assertTrue(build.call_args.kwargs["persist_chat"])
+        self.assertEqual(build.call_args.kwargs["session_id"], "conv-1")
 
     async def test_run_path_does_not_rebuild_agent(self) -> None:
         agent = MagicMock()

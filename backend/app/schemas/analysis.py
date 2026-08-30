@@ -11,11 +11,13 @@ ANALYSIS_CONFIRM_MESSAGE = (
 
 class AnalysisStartRequest(BaseModel):
     question: str = Field(..., min_length=1)
+    conversation_id: UUID | None = None
 
 
 class AnalysisStartResponse(BaseModel):
     analysis_id: UUID
     attempt_id: UUID
+    conversation_id: UUID
     proposed_sql: str
     message: str
 

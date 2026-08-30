@@ -1,10 +1,12 @@
 export type AnalysisStartRequest = {
   question: string
+  conversation_id?: string | null
 }
 
 export type AnalysisStartResponse = {
   analysis_id: string
   attempt_id: string
+  conversation_id: string
   proposed_sql: string
   message: string
 }
