@@ -5,8 +5,9 @@ execute_sql_for_project; prior results are injected as plain prompt text.
 
 One /analysis/{id}/run keeps a single Agent instance (InMemoryDb +
 add_history_to_context) so introspect_schema results from the first LLM
-turn are reused on later turns. /analysis/start is a separate HTTP
-request and still builds a fresh agent.
+turn are reused on later turns. /analysis/start builds a fresh agent
+without Agno run-history; playground follow-ups use format_conversation_history
+(question + SQL + analysis answer only).
 """
 
 from __future__ import annotations
@@ -94,6 +95,9 @@ ANALYSIS_INSTRUCTIONS = [
     "table or return a short synthesize answer — do not invent schema.",
     "Prefer one well-targeted query. Only propose a second query when the "
     "first result is insufficient to answer the original question.",
+    "If this chat has prior turns, resolve pronouns (he, she, they, this customer, "
+    "that department) using names and filters from that history. Never write SQL "
+    "literals like WHERE name = 'he'. Use the actual name (e.g. firstname = 'Akash').",
     "OUTPUT RULE: Your final message must be a single JSON object with no "
     "text before or after it.",
     'To propose SQL: {"action": "run_query", "sql": "SELECT ..."}',
@@ -122,13 +126,13 @@ def _build_analysis_agent(
     pool: asyncpg.Pool,
     *,
     session_id: str | None = None,
+    persist_chat: bool = False,
 ) -> Agent:
     introspect_schema = create_introspect_schema_tool(
         project_id=project_id,
         pool=pool,
     )
-    # InMemoryDb is required: add_history_to_context is a no-op without a db.
-    return Agent(
+    shared = dict(
         name="Analysis Agent",
         model=OpenAIChat(id=settings.MODEL_ID, api_key=settings.OPENAI_API_KEY),
         tools=[introspect_schema],
@@ -138,10 +142,19 @@ def _build_analysis_agent(
             'or {"action": "synthesize", "answer": "..."}.'
         ),
         markdown=False,
+        store_tool_messages=False,
+        session_id=session_id,
+    )
+    if persist_chat:
+        # Cross-question memory is format_conversation_history only.
+        return Agent(**shared, add_history_to_context=False)
+    # InMemoryDb is required: add_history_to_context is a no-op without a db.
+    # /run uses this so query result tables are not stored in the chat session.
+    return Agent(
+        **shared,
         db=InMemoryDb(),
         add_history_to_context=True,
-        store_tool_messages=True,
-        session_id=session_id,
+        store_history_messages=True,
     )
 
 
@@ -187,6 +200,24 @@ def _format_prior_results(prior_results: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def format_conversation_history(turns: list[Any]) -> str:
+    """Slim Q + SQL + answer for the LLM. No result tables or graph config."""
+    if not turns:
+        return ""
+    parts = [
+        "Prior conversation in this chat. Resolve he/she/they/this person to the "
+        "named entities below. Never use the pronoun as a SQL string literal.",
+    ]
+    for index, turn in enumerate(turns, start=1):
+        question = turn["question"] if isinstance(turn, dict) else turn["question"]
+        sql = turn["sql"] if isinstance(turn, dict) else turn["sql"]
+        answer = turn["answer"] if isinstance(turn, dict) else turn["answer"]
+        parts.append(
+            f"Turn {index}\nQuestion: {question}\nSQL: {sql}\nAnswer: {answer}"
+        )
+    return "\n\n".join(parts)
+
+
 def build_analysis_prompt(
     question: str,
     *,
@@ -195,11 +226,14 @@ def build_analysis_prompt(
     learnings_context: str = "",
     schema_in_session: bool = False,
     schema_context: str = "",
+    conversation_context: str = "",
 ) -> str:
     """Build the user prompt. Prior results are plain text, never a tool result."""
     parts: list[str] = []
     if learnings_context:
         parts.append(learnings_context)
+    if conversation_context:
+        parts.append(conversation_context)
     if schema_context:
         parts.append(
             "Schema for tables in the confirmed SQL "
@@ -349,6 +383,9 @@ async def generate_analysis_query(
     schema_in_session: bool = False,
     learnings_context: str | None = None,
     schema_context: str = "",
+    conversation_context: str = "",
+    persist_chat: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Ask the analysis agent to propose SQL or synthesize an answer.
 
@@ -371,11 +408,17 @@ async def generate_analysis_query(
         learnings_context=learnings_context,
         schema_in_session=schema_in_session,
         schema_context=schema_context,
+        conversation_context=conversation_context,
     )
 
     reuse_session = agent is not None
     if agent is None:
-        agent = _build_analysis_agent(project_id, pool)
+        agent = _build_analysis_agent(
+            project_id,
+            pool,
+            session_id=session_id,
+            persist_chat=persist_chat,
+        )
     turn = "synthesize" if force_synthesize else ("followup" if prior_results else "start")
     logger.info(
         "analysis_agent arun force_synthesize=%s reuse_session=%s "
@@ -473,7 +516,7 @@ async def run_analysis_chain(
     schema_context = await schema_context_for_sql(pool, project_id, current_sql)
 
     agent = _build_analysis_agent(
-        project_id, pool, session_id=str(analysis_id)
+        project_id, pool, session_id=str(analysis_id), persist_chat=False
     )
 
     for _ in range(MAX_ANALYSIS_QUERIES):

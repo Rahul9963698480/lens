@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { AnalysisConfirmDialog } from '@/components/playground/analysis-confirm-dialog'
 import { AnalysisResultCard } from '@/components/playground/analysis-result-card'
+import { ConversationSidebar } from '@/components/playground/conversation-sidebar'
 import { FeedbackRuleDialog } from '@/components/playground/feedback-rule-dialog'
 import {
   Attachment,
@@ -16,11 +17,13 @@ import { BrandSpinner } from '@/components/ui/brand-loader'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
 import { Message, MessageContent, MessageGroup } from '@/components/ui/message'
-import { useRunAnalysis, useStartAnalysis, useSubmitFeedback } from '@/hooks/use-projects'
-import { apiErrorMessage } from '@/lib/api'
+import { useQueryClient } from '@tanstack/react-query'
+import { useRunAnalysis, useStartAnalysis, useSubmitFeedback, useConversations, useDeleteConversation, projectKeys } from '@/hooks/use-projects'
+import { apiErrorMessage, projectsApi } from '@/lib/api'
 import { notify } from '@/lib/notify'
 import { cn } from '@/lib/utils'
 import type { AnalysisRunResponse } from '@/types/analysis'
+import type { PlaygroundMessage } from '@/types/conversation'
 
 const MAX_FILES = 10
 
@@ -186,6 +189,42 @@ function ChatComposer({
   )
 }
 
+function turnsToMessages(turns: PlaygroundMessage[]): ChatMessage[] {
+  return turns.flatMap((turn) => [
+    {
+      id: `${turn.id}-q`,
+      role: 'user' as const,
+      content: turn.question,
+      attachments: [],
+    },
+    {
+      id: `${turn.id}-a`,
+      role: 'assistant' as const,
+      content: '',
+      attachments: [],
+      analysisResult: {
+        analysis_id: turn.analysis_id ?? turn.id,
+        answer: turn.answer,
+        queries_used:
+          turn.queries_used && turn.queries_used.length > 0
+            ? turn.queries_used
+            : [
+                {
+                  attempt_id: turn.id,
+                  sql: turn.sql,
+                  result_summary: {
+                    status: 'ok',
+                    columns: [],
+                    row_count: 0,
+                    rows_preview: [],
+                  },
+                },
+              ],
+      },
+    },
+  ])
+}
+
 export function PlaygroundChat({ projectId }: { projectId?: string }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
@@ -211,6 +250,10 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
   const startAnalysis = useStartAnalysis()
   const runAnalysis = useRunAnalysis()
   const submitFeedback = useSubmitFeedback()
+  const queryClient = useQueryClient()
+  const conversationsQuery = useConversations(projectId)
+  const deleteConversation = useDeleteConversation(projectId)
+  const [conversationId, setConversationId] = useState<string | null>(null)
 
   useEffect(() => {
     return () => {
@@ -344,6 +387,11 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
       const response = await startAnalysis.mutateAsync({
         projectId,
         question: content,
+        conversationId,
+      })
+      setConversationId(response.conversation_id)
+      void queryClient.invalidateQueries({
+        queryKey: projectKeys.conversations(projectId),
       })
       updateMessage(assistantMessage.id, {
         generating: false,
@@ -382,6 +430,7 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
       const result = await runAnalysis.mutateAsync({
         projectId,
         analysisId,
+        conversationId,
         onProgress: (_stage, message) => {
           updateMessage(messageId, {
             running: true,
@@ -395,6 +444,11 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
         analysisResult: result,
       })
       setConfirmDialog(null)
+      if (projectId) {
+        void queryClient.invalidateQueries({
+          queryKey: projectKeys.conversations(projectId),
+        })
+      }
     } catch (error) {
       updateMessage(messageId, {
         running: false,
@@ -465,10 +519,66 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
     }
   }
 
+  const handleNewChat = () => {
+    setConversationId(null)
+    setMessages([])
+    setConfirmDialog(null)
+  }
+
+  const handleDeleteConversation = async (id: string) => {
+    if (!projectId) {
+      return
+    }
+    if (!window.confirm('Delete this chat? This cannot be undone.')) {
+      return
+    }
+    try {
+      await deleteConversation.mutateAsync({
+        projectId,
+        conversationId: id,
+      })
+      if (conversationId === id) {
+        handleNewChat()
+      }
+    } catch (error) {
+      notify.error(errorMessage(error, 'Failed to delete chat.'))
+    }
+  }
+
+  const handleSelectConversation = async (id: string) => {
+    if (!projectId) {
+      return
+    }
+    try {
+      const detail = await projectsApi.getConversation(projectId, id)
+      setConversationId(id)
+      setMessages(turnsToMessages(detail.messages))
+    } catch (error) {
+      notify.error(errorMessage(error, 'Failed to load chat.'))
+    }
+  }
+
   const isEmpty = messages.length === 0
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
+    <div className="flex min-h-0 flex-1 bg-background">
+      <ConversationSidebar
+        conversations={conversationsQuery.data ?? []}
+        selectedId={conversationId}
+        onSelect={(id) => {
+          void handleSelectConversation(id)
+        }}
+        onNewChat={handleNewChat}
+        onDelete={(id) => {
+          void handleDeleteConversation(id)
+        }}
+        deletingId={
+          deleteConversation.isPending
+            ? deleteConversation.variables?.conversationId
+            : null
+        }
+      />
+      <div className="flex min-h-0 flex-1 flex-col">
       <input
         ref={fileInputRef}
         type="file"
@@ -600,6 +710,7 @@ export function PlaygroundChat({ projectId }: { projectId?: string }) {
           onClose={() => setFeedbackDialog(null)}
         />
       ) : null}
+      </div>
     </div>
   )
 }

@@ -9,11 +9,12 @@ from fastapi.responses import StreamingResponse
 from app.agent.analysis_agent import (
     AnalysisAlreadyRunError,
     AnalysisNotFoundError,
+    format_conversation_history,
     generate_analysis_query,
     run_analysis_chain,
 )
 from app.config import settings
-from app.db import app_db, learnings
+from app.db import app_db, conversations as conv_db, learnings
 from app.db.app_db import get_pool
 from app.schemas.analysis import (
     ANALYSIS_CONFIRM_MESSAGE,
@@ -62,12 +63,34 @@ async def start_analysis(
     await _require_project(pool, project_id)
     _require_openai_key()
 
+    conversation_id = payload.conversation_id
+    if conversation_id is not None:
+        existing = await conv_db.get_conversation(pool, project_id, conversation_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found",
+            )
+    else:
+        created = await conv_db.create_conversation(
+            pool,
+            project_id=project_id,
+            title=conv_db.conversation_title(payload.question),
+        )
+        conversation_id = created["id"]
+
+    prior_turns = await conv_db.list_recent_turns(pool, conversation_id, limit=5)
+    conversation_context = format_conversation_history(prior_turns)
+
     try:
         decision = await generate_analysis_query(
             project_id=project_id,
             pool=pool,
             question=payload.question,
             prior_results=None,
+            conversation_context=conversation_context,
+            persist_chat=True,
+            session_id=str(conversation_id),
         )
     except ValueError as exc:
         raise HTTPException(
@@ -98,6 +121,7 @@ async def start_analysis(
     return AnalysisStartResponse(
         analysis_id=analysis_id,
         attempt_id=attempt["id"],
+        conversation_id=conversation_id,
         proposed_sql=sql,
         message=ANALYSIS_CONFIRM_MESSAGE,
     )
@@ -112,14 +136,17 @@ async def run_analysis(
     request: Request,
     pool: Pool = Depends(get_pool),
     stream: bool = Query(False),
+    conversation_id: UUID | None = Query(None),
 ):
     await _require_project(pool, project_id)
     _require_openai_key()
 
     if not _wants_event_stream(request, stream):
-        return AnalysisRunResponse.model_validate(
-            await _run_analysis_payload(project_id, analysis_id, pool)
+        payload = await _run_analysis_payload(project_id, analysis_id, pool)
+        await _persist_conversation_turn(
+            pool, project_id, conversation_id, analysis_id, payload
         )
+        return AnalysisRunResponse.model_validate(payload)
 
     queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
 
@@ -133,6 +160,9 @@ async def run_analysis(
                 analysis_id=analysis_id,
                 pool=pool,
                 on_progress=on_progress,
+            )
+            await _persist_conversation_turn(
+                pool, project_id, conversation_id, analysis_id, payload
             )
             body = AnalysisRunResponse.model_validate(payload).model_dump(mode="json")
             await queue.put(("complete", body))
@@ -169,6 +199,33 @@ async def run_analysis(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+async def _persist_conversation_turn(
+    pool: Pool,
+    project_id: UUID,
+    conversation_id: UUID | None,
+    analysis_id: UUID,
+    payload: dict,
+) -> None:
+    if conversation_id is None:
+        return
+    existing = await conv_db.get_conversation(pool, project_id, conversation_id)
+    if existing is None:
+        return
+    attempts = await learnings.list_attempts_for_analysis(pool, project_id, analysis_id)
+    question = attempts[0]["question"] if attempts else ""
+    queries = payload.get("queries_used") or []
+    sql = "\n\n".join(str(item.get("sql") or "") for item in queries).strip()
+    await conv_db.insert_message(
+        pool,
+        conversation_id=conversation_id,
+        question=question,
+        sql=sql,
+        answer=str(payload.get("answer") or ""),
+        analysis_id=analysis_id,
+        queries_used=queries,
     )
 
 

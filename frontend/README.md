@@ -1,77 +1,61 @@
-# React + TypeScript + Vite
+# XYMP Lens frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Vite + React + TypeScript UI for Lens: project list, workspace schema, and Playground analysis chat.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
-
-Note: This will impact Vite dev & build performances.
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Dev server: **http://localhost:8080**
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+API calls go through the Vite proxy (`vite.config.ts`) to **http://127.0.0.1:8000** (`/projects`, `/health`). Start the backend first (`uvicorn` from `backend/`). Dev proxy timeout is 5 minutes so long analysis runs do not drop.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Optional: set `VITE_API_URL` if you are not using the proxy.
 
-```
+## App routes
+
+| Path | Screen |
+|------|--------|
+| `/` | Projects (create Postgres / Excel) |
+| `/table/:projectId` | Workspace (schema) and **Playground** |
+
+## Playground
+
+Left **Chats** list (`conversation-sidebar.tsx`): new chat, open a thread, delete (hover trash).
+
+Ask a question → confirm SQL → run. Tabs on the assistant message: **Analysis** (prose bullets), **Data** (table), **Query** (SQL), **Graph**.
+
+Thumbs up/down on a query opens **learnings** (rule text + confirmed SQL) so later questions can reuse the pattern.
+
+Workspace tab: table explorer, schema, preview (DuckDB for Excel projects).
+
+### Chat history
+
+- Each finished turn is stored as question + SQL + analysis answer (`playground_messages`).
+- `queries_used` is kept so Data / Query / Graph can restore. It is **not** sent to the LLM on the next question.
+- Follow-ups (for example “which region is **he** from”) use the last N turns of Q + SQL + answer from the backend.
+
+APIs used:
+
+- `POST /projects/{id}/analysis/start` (optional `conversation_id`)
+- `POST /projects/{id}/analysis/{analysisId}/run?stream=1&conversation_id=...`
+- `GET /projects/{id}/conversations`
+- `GET /projects/{id}/conversations/{conversationId}`
+- `DELETE /projects/{id}/conversations/{conversationId}`
+- `PATCH /projects/{id}/attempts/{attemptId}/feedback`
+- `POST /projects/{id}/attempts/{attemptId}/confirm`
+
+Other UI APIs: `GET/POST /projects`, `POST /projects/upload-xlsx`, `GET .../schema`, `GET .../preview`, schema annotation PATCHes.
+
+## Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm run dev` | Vite on port 8080 |
+| `npm run build` | Production build |
+| `npm run lint` | ESLint |
+| `npm run preview` | Preview production build |

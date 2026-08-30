@@ -13,6 +13,10 @@ import type {
   AnalysisStartRequest,
   AnalysisStartResponse,
 } from '@/types/analysis'
+import type {
+  PlaygroundConversation,
+  PlaygroundConversationDetail,
+} from '@/types/conversation'
 import { config } from '@/config/env'
 import { apiErrorMessage } from './error-message'
 import axiosInstance from './axios-instance'
@@ -47,8 +51,13 @@ async function runAnalysisStream(
   projectId: string,
   analysisId: string,
   onProgress?: (stage: string, message: string) => void,
+  conversationId?: string | null,
 ): Promise<AnalysisRunResponse> {
-  const url = `${config.apiUrl}/projects/${projectId}/analysis/${analysisId}/run?stream=1`
+  const params = new URLSearchParams({ stream: '1' })
+  if (conversationId) {
+    params.set('conversation_id', conversationId)
+  }
+  const url = `${config.apiUrl}/projects/${projectId}/analysis/${analysisId}/run?${params.toString()}`
   const response = await fetch(url, {
     method: 'POST',
     headers: { Accept: 'text/event-stream' },
@@ -157,7 +166,20 @@ const projectsApi = {
     projectId: string,
     analysisId: string,
     onProgress?: (stage: string, message: string) => void,
-  ) => runAnalysisStream(projectId, analysisId, onProgress),
+    conversationId?: string | null,
+  ) => runAnalysisStream(projectId, analysisId, onProgress, conversationId),
+  listConversations: (projectId: string) =>
+    axiosInstance.get<PlaygroundConversation[]>(
+      `/projects/${projectId}/conversations`,
+    ),
+  getConversation: (projectId: string, conversationId: string) =>
+    axiosInstance.get<PlaygroundConversationDetail>(
+      `/projects/${projectId}/conversations/${conversationId}`,
+    ),
+  deleteConversation: (projectId: string, conversationId: string) =>
+    axiosInstance.delete<void>(
+      `/projects/${projectId}/conversations/${conversationId}`,
+    ),
   submitFeedback: (
     projectId: string,
     attemptId: string,
